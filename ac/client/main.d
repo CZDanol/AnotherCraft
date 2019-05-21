@@ -49,6 +49,16 @@ import ac.content.worldgen.overworld;
 extern (C) export ulong NvOptimusEnablement = 0x00000001;
 extern (C) export int AmdPowerXpressRequestHighPerformance = 1;
 
+import std.compiler;
+
+version (Posix) version (DigitalMars) {
+	debug {
+	}
+	else {
+		static assert(false, "There seems to be a problem/bug with DMD on Posix. Either use other compiler (like LDC) or try debugging it.");
+	}
+}
+
 version = recordingMode;
 
 void main(string[] args) {
@@ -271,9 +281,11 @@ protected:
 								WorldVec pos = WorldVec(x, y, z);
 								if (!world.isValidBlockPosition(pos))
 									continue;
+
 								ctx.setContext(world, pos);
 								if (ctx.isAir)
 									continue;
+
 								cmgr.offset = ctx.pos.to!Vec3F;
 								ctx.block.b_collision(ctx, cmgr);
 							}
