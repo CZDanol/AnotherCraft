@@ -1,0 +1,31 @@
+name "anothercraft"
+description "AnotherCraft"
+authors "Daniel 'Danol' Čejchan"
+
+sourcePaths "ac/common"
+sourcePaths "ac/client"
+sourcePaths "ac/content"
+
+versions "server" "client" "clientMain"
+#versions "debugWorld"
+#versions "debugWorldUpdates"
+#versions "perfWatch"
+#versions "debugWorldResources"
+#versions "profileGC"
+
+versions "GL_45"
+versions "GL_ARB_bindless_texture" "ARB_texture_filter_anisotropic" "ARB_shader_draw_parameters"
+
+dependency "bindbc-opengl" version="~>0.3.0"
+dependency "derelict-sfml2" version="~>4.0.0-beta.2"
+dependency "d2sqlite3" version="~>0.18.1"
+
+subConfiguration "d2sqlite3" "without-lib"
+libs "$PACKAGE_DIR/lib_${ARCH}_$PLATFORM/sqlite3"
+
+lflags "/LARGEADDRESSAWARE" platform="windows"
+
+targetName "ac"
+targetPath "bin_${ARCH}_$PLATFORM"
+targetType "executable"
+workingDirectory "bin_${ARCH}_$PLATFORM"
