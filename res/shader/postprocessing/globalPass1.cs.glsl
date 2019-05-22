@@ -85,7 +85,8 @@ void main() {
 	#endif
 
 	#if ATMOSPHERE
-		const float distanceFromPlayer2D = distance(worldCoords.xy, cameraPos.xy);
+		const vec2 posDiff = abs(worldCoords.xy - cameraPos.xy);
+		const float distanceFromPlayer2D = max(posDiff.x, posDiff.y);
 
 		result.rgb = mix(result.rgb, skyWithoutSun(posF, viewNormal, true) * 0.6, pow(min(distanceFromPlayer2D / (viewDistance * 16 * 0.8), 1), 2));
 		//result.a *= 1 - min(pow(distanceFromPlayer2D / (viewDistance * 16), 3), 1) * 0.8;

@@ -28,7 +28,7 @@ vec3 shading(vec3 worldCoords, vec3 normal, float glow) {
 		uvec4 texelLightValue[2];
 
 		// Check if the sample needs to interpolate between multiple textures (because we're sampling on the edge of one light map)...
-		if(posInArea.x <= AREA_WIDTH - 1 && posInArea.y <= AREA_WIDTH - 1) {
+		if(posInArea.x < AREA_WIDTH - 1 && posInArea.y < AREA_WIDTH - 1) {
 			const vec3 texCoords = vec3((floor(posInArea.xy) + 0.5) / AREA_WIDTH, floor(posInArea.z));
 			const usampler2DArray lightMap = getLightMap(areaIndex);
 
@@ -76,21 +76,41 @@ vec3 shading(vec3 worldCoords, vec3 normal, float glow) {
 	const vec3 baseDirectionalDaylightComponent = directionalDaylightColor * max(0, dot(normal, daylightDirection));
 
 	#if SHADOW_MAPPING
-		const vec4 shadowSampleScreenPosW = shadowSamplingMatrix * vec4(worldCoords + normal * 0.1, 1);
+		const vec4 shadowSampleScreenPosW = shadowSamplingMatrix * vec4(worldCoords + normal * 0.05, 1);
 		const vec3 shadowSampleScreenPos = shadowSampleScreenPosW.xyz / shadowSampleScreenPosW.w;
-		const vec2 shadowSampleFragPos = shadowSampleScreenPos.xy * textureSize(inShadowMap, 0) - 0.498; // Idk why it has to be 0.498 but 0.5 causes artifacts (empirically tested)
+		//const vec2 shadowSampleFragPos = shadowSampleScreenPos.xy * textureSize(inShadowMap, 0) - 0.498; // Idk why it has to be 0.498 but 0.5 causes artifacts (empirically tested)
 
-		const vec4 shadowData = textureGather(inShadowMap, shadowSampleScreenPos.xy, shadowSampleScreenPos.z);
+		const float shadowMapSizeInv= float(1) / textureSize(inShadowMap, 0).x;
 
-		const vec2 shadowSampleFragPosFract = fract(shadowSampleFragPos);
-		const vec2 smInterpolation1 = mix(vec2(shadowData[2],shadowData[3]), vec2(shadowData[1], shadowData[0]), shadowSampleFragPosFract.y);
-		const float isOutsideShadow = mix(smInterpolation1.y, smInterpolation1.x, shadowSampleFragPosFract.x);
+		const float isOutsideShadow = texture(inShadowMap, shadowSampleScreenPos);
+
+		/*const float isOutsideShadow = (
+			texture(inShadowMap, shadowSampleScreenPos)
+			+ texture(inShadowMap, shadowSampleScreenPos + vec3(-1.5, 0.5,0)* shadowMapSizeInv)
+			+ texture(inShadowMap, shadowSampleScreenPos + vec3(0.5, 0.5,0) * shadowMapSizeInv)
+			+ texture(inShadowMap, shadowSampleScreenPos + vec3(-1.5, -1.5,0) * shadowMapSizeInv)
+			+ texture(inShadowMap, shadowSampleScreenPos + vec3(0.5, -1.5,0) * shadowMapSizeInv)
+			+ texture(inShadowMap, shadowSampleScreenPos + vec3(1.5, -1.5,0) * shadowMapSizeInv)
+		) / 6;*/
+		
+		/*const vec4 shadowData = textureGather(inShadowMap, shadowSampleScreenPos.xy, shadowSampleScreenPos.z);
+		const vec2 smInterpolation1 = mix(shadowData.wx, shadowData.zy, fp.x);
+		const float isOutsideShadow = mix(smInterpolation1.x, smInterpolation1.y, fp.y);*/
+
+		/*const float shadowData1 = dot(textureGather(inShadowMap, shadowSampleScreenPos.xy, shadowSampleScreenPos.z), dt);//vec4(0.25, 0.375, 0.25, 0.125));
+		const float shadowData2 = dot(textureGatherOffset(inShadowMap, shadowSampleScreenPos.xy, shadowSampleScreenPos.z, ivec2(-1,-1)), dt);//vec4(0.375, 0.25, 0.125, 0.25));
+		const float shadowData3 = dot(textureGatherOffset(inShadowMap, shadowSampleScreenPos.xy, shadowSampleScreenPos.z, ivec2(1,-1)), dt);//vec4(0.125, 0.25, 0.375, 0.25));
+		const float shadowData4 = dot(textureGatherOffset(inShadowMap, shadowSampleScreenPos.xy, shadowSampleScreenPos.z, ivec2(-1,1)), dt);//vec4(0.25, 0.125, 0.25, 0.375));
+		const float shadowData5 = dot(textureGatherOffset(inShadowMap, shadowSampleScreenPos.xy, shadowSampleScreenPos.z, ivec2(1,1)), dt);//vec4(0.25, 0.125, 0.25, 0.375));
+
+		const float isOutsideShadow = dot(vec4(shadowData2, shadowData3, shadowData4, shadowData5), vec4(0.2, 0.3, 0.4, 0.1));*/
+		
 		
 		//const float isOutsideShadow = (shadowData[0] + shadowData[1] + shadowData[2] + shadowData[3]) / 4;
 		const float distanceFromPlayer = distance(worldCoords, cameraPos);
 
 		const vec3 directionalDaylightComponent = baseDirectionalDaylightComponent * daylightValue * mix(isOutsideShadow, 1, min(1, distanceFromPlayer * 0.02));
-		//const vec3 directionalDaylightComponent = vec3(shadowData.x, shadowSampleFragPosFract);
+		//const vec3 directionalDaylightComponent = vec3(shadowData.x, fp);
 	#else
 		const vec3 directionalDaylightComponent = baseDirectionalDaylightComponent * daylightValue;
 	#endif

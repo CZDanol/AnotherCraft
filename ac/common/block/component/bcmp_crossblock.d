@@ -16,14 +16,15 @@ public:
 
 		cfg.alphaChannel = BlockFaceSettings.AlphaChannel.alphaTest;
 		cfg.cullFace = false;
+		cfg.backFacingNormal = BlockFaceSettings.BackFacingNormal.invertXY;
 
 		face_ = new BlockFace(filename, cfg);
 	}
 
 public:
 	version (client) override void b_staticRender(BlockContext ctx, BlockRenderer rr) {
-		rr.drawFace(face_, Vec3U8(0, 0, 1), Vec3U8(1, 1, 1), Vec3U8(0, 0, 0), Vec3U8(1, 1, 0), Block.FaceNormalU8.up);
-		rr.drawFace(face_, Vec3U8(0, 1, 1), Vec3U8(1, 0, 1), Vec3U8(0, 1, 0), Vec3U8(1, 0, 0), Block.FaceNormalU8.up);
+		rr.drawFace(face_, Vec3U8(0, 0, 1), Vec3U8(1, 1, 1), Vec3U8(0, 0, 0), Vec3U8(1, 1, 0), Block.FaceNormalU8.fromVec3F!(1, -1, 2));
+		rr.drawFace(face_, Vec3U8(0, 1, 1), Vec3U8(1, 0, 1), Vec3U8(0, 1, 0), Vec3U8(1, 0, 0), Block.FaceNormalU8.fromVec3F!(-1, -1, 2));
 	}
 
 	version (client) override RenderProperties renderProperties() {

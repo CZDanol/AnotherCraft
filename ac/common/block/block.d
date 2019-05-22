@@ -1,5 +1,7 @@
 module ac.common.block.block;
 
+import std.conv;
+
 import ac.common.math.vector;
 import ac.common.world.blockcontext;
 import ac.common.world.chunk;
@@ -54,6 +56,10 @@ public:
 		immutable back = array[Block.Face.back];
 		immutable down = array[Block.Face.bottom];
 		immutable up = array[Block.Face.top];
+
+		template fromVec3F(float x, float y, float z) {
+			enum fromVec3F = (Vec3F(x, y, z).normalized * 127 + 127.5f).to!Vec3U8;
+		}
 	}
 
 	version (client) alias RenderProperties = uint;

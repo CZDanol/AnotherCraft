@@ -83,7 +83,9 @@ void main() {
 		const vec4 worldCoordsW = invertedViewMatrix * vec4(screenSpacePos, depth01 * 2 - 1, 1);
 		const vec3 worldCoords = worldCoordsW.xyz / worldCoordsW.w;
 		
-		const float distanceFromPlayer2D = distance(worldCoords.xy, cameraPos.xy);
+		//const float distanceFromPlayer2D = distance(worldCoords.xy, cameraPos.xy);
+		const vec2 posDiff = abs(worldCoords.xy - cameraPos.xy);
+		const float distanceFromPlayer2D = max(posDiff.x, posDiff.y);
 		result = mix(result, texelFetch(inDof, pos, 0), pow(min(1, distanceFromPlayer2D / 512), 1.5));
 	#endif
 

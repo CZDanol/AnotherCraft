@@ -23,17 +23,18 @@ public:
 
 		cfg.alphaChannel = BlockFaceSettings.AlphaChannel.alphaTest;
 		cfg.cullFace = false;
+		cfg.backFacingNormal = BlockFaceSettings.BackFacingNormal.invertXY;
 
 		face_ = new BlockFace(filename, cfg);
 	}
 
 public:
 	version (client) override void b_staticRender(BlockContext ctx, BlockRenderer rr) {
-		rr.drawFace(face_, Vec3F(0, 0.3, 1), Vec3F(1, 0.3, 1), Vec3F(0, 0.3, 0), Vec3F(1, 0.3, 0), Block.FaceNormalU8.up);
-		rr.drawFace(face_, Vec3F(0, 0.6, 1), Vec3F(1, 0.6, 1), Vec3F(0, 0.6, 0), Vec3F(1, 0.6, 0), Block.FaceNormalU8.up);
+		rr.drawFace(face_, Vec3F(0, 0.3, 1), Vec3F(1, 0.3, 1), Vec3F(0, 0.3, 0), Vec3F(1, 0.3, 0), Block.FaceNormalU8.fromVec3F!(0, -1, 0.3));
+		rr.drawFace(face_, Vec3F(0, 0.6, 1), Vec3F(1, 0.6, 1), Vec3F(0, 0.6, 0), Vec3F(1, 0.6, 0), Block.FaceNormalU8.fromVec3F!(0, -1, 0.3));
 
-		rr.drawFace(face_, Vec3F(0.3, 1, 1), Vec3F(0.3, 0, 1), Vec3F(0.3, 1, 0), Vec3F(0.3, 0, 0), Block.FaceNormalU8.up);
-		rr.drawFace(face_, Vec3F(0.6, 1, 1), Vec3F(0.6, 0, 1), Vec3F(0.6, 1, 0), Vec3F(0.6, 0, 0), Block.FaceNormalU8.up);
+		rr.drawFace(face_, Vec3F(0.3, 1, 1), Vec3F(0.3, 0, 1), Vec3F(0.3, 1, 0), Vec3F(0.3, 0, 0), Block.FaceNormalU8.fromVec3F!(-1, 0, 0.3));
+		rr.drawFace(face_, Vec3F(0.6, 1, 1), Vec3F(0.6, 0, 1), Vec3F(0.6, 1, 0), Vec3F(0.6, 0, 0), Block.FaceNormalU8.fromVec3F!(-1, 0, 0.3));
 	}
 
 	version (client) override RenderProperties renderProperties() {

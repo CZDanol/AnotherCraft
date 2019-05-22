@@ -47,6 +47,11 @@ void main() {
 
 #else
 void main() {
+	// textureQueryLod after discard is broken on linux AMDs
+	#if BETTER_TEXTURING
+		const vec2 lod = textureQueryLod(tex, uv_);
+	#endif
+
 	#if NEAR_DEPTH_TEST
 		const ivec2 coord = ivec2(gl_FragCoord.xy);
 
@@ -64,7 +69,6 @@ void main() {
 
 	#elif BETTER_TEXTURING
 		const vec2 texSize = vec2(textureSize(tex, 0).xy);
-		const vec2 lod = textureQueryLod(tex, uv_);
 
 		vec2 adjUv;
 
@@ -101,6 +105,10 @@ void main() {
 
 	#if ALPHA_CHANNEL == ALPHA_CHANNEL_GLOW
 		normal = vec4(norm_, 1 - color_.a);
+	#elif BACK_FACING_NORMAL == BACK_FACING_NORMAL_INVERT
+		normal = vec4(gl_FrontFacing ? norm_ : 1 - norm_, 1 - color_.a);
+	#elif BACK_FACING_NORMAL == BACK_FACING_NORMAL_INVERT_XY
+		normal = vec4(gl_FrontFacing ? norm_.xy : 1 - norm_.xy, norm_.z, 1 - color_.a);
 	#else
 		normal = vec4(norm_, 0);
 	#endif

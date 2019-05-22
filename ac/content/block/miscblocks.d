@@ -96,7 +96,7 @@ void registerContent() {
 
 	{
 		auto block = new ComponentBlock("wheat");
-		block.lightProperties.opacity = 3;
+		block.lightProperties.opacity = 4;
 
 		auto rcmp = new BlockComponent_2x2GridBlock();
 		version (client)

@@ -310,7 +310,7 @@ private:
 			Vec3F minV = Vec3F(1000, 1000, 1000), maxV = Vec3F(-1000, -1000, -1000);
 			foreach (i; 0 .. 8) {
 				enum shadowMapDepth = 32;
-				const Vec3F cameraSpacePt = Vec3F(i & 1, (i >> 1) & 1, (i >> 2) & 1) * Vec3F(2, 2, /*Le magic constant*/ 1.99) - 1;
+				const Vec3F cameraSpacePt = Vec3F(i & 1, (i >> 1) & 1, (i >> 2) & 1) * Vec3F(2, 2, /*Le magic constant*/ 1.985) - 1;
 				const Vec3F worldSpacePt = (cfg_.invertedCameraFrustumMatrix * cameraSpacePt).perspectiveNormalized;
 				const Vec3F shadowSpacePt = (cfg_.shadowRenderMatrix * worldSpacePt).xyz; // No need to perspective normalization - ortho projection
 

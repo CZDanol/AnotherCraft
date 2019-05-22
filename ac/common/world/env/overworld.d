@@ -77,7 +77,7 @@ public:
 		// Ambient daylight color
 		{
 			immutable midnightColor = Vec3F(2, 2, 2) / 255;
-			immutable noonColor = Vec3F(145, 145, 145) / 255;
+			immutable noonColor = Vec3F(140, 145, 145) / 255;
 
 			lightSettings_.ambientDaylightColor = interpolateColors(dayTime, //
 					[midnightColor, noonColor, noonColor, midnightColor], //
@@ -90,7 +90,7 @@ public:
 			immutable midnightColor = Vec3F(10, 10, 10) / 255;
 			immutable dawnColor = Vec3F(0, 65, 85) / 255;
 			immutable duskColor = Vec3F(19, 47, 84) / 255;
-			immutable dayColor = Vec3F(67, 168, 249) / 255;
+			immutable dayColor = Vec3F(48, 155, 242) / 255;
 
 			lightSettings_.skyColor = interpolateColors(dayTime, //
 					[midnightColor, dawnColor, dayColor, dayColor, duskColor, midnightColor], //
@@ -104,7 +104,7 @@ public:
 			immutable dawnColor = Vec3F(150, 100, 50) * 0.5 / 255;
 			immutable duskColor = Vec3F(230, 100, 50) * 0.5 / 255;
 
-			immutable dayColor = Vec3F(60, 60, 60) / 255;
+			immutable dayColor = Vec3F(80, 80, 80) / 255;
 			immutable morningColor = Vec3F(120, 120, 60) * 0.8 / 255;
 			immutable eveningColor = Vec3F(80, 30, 30) / 255;
 
@@ -122,7 +122,7 @@ public:
 
 		// Sun color
 		{
-			immutable dayColor = Vec3F(255, 255, 100) / 255;
+			immutable dayColor = Vec3F(255, 230, 150) / 255;
 			immutable nightColor = Vec3F(130, 180, 252) * 0.8 / 255;
 			immutable mezzoColor = Vec3F(0, 0, 0);
 

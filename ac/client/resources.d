@@ -1,10 +1,11 @@
 module ac.client.resources;
 
 import bindbc.opengl;
+import std.algorithm;
+import std.container.array;
 import std.conv;
 import std.format;
 import std.string;
-import std.container.array;
 
 import ac.client.block.blockface;
 import ac.client.block.blockfacerenderingcontext;
@@ -102,6 +103,9 @@ public:
 
 		// Don't care
 		settings.nonUniform = false;
+
+		if (!settings.alphaChannel.among(BlockFaceSettings.AlphaChannel.alphaTest, BlockFaceSettings.AlphaChannel.transparency))
+			settings.backFacingNormal = BlockFaceSettings.BackFacingNormal.same;
 
 		if (auto it = settings in contextsAssoc_)
 			return *it;

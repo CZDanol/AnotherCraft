@@ -85,6 +85,12 @@ public:
 		glow
 	}
 
+	enum BackFacingNormal : ubyte {
+		same,
+		invert,
+		invertXY
+	}
+
 public:
 	int resolution;
 	bool cullFace = true;
@@ -95,6 +101,7 @@ public:
 public:
 	Waving waving;
 	AlphaChannel alphaChannel;
+	BackFacingNormal backFacingNormal = BackFacingNormal.invert;
 
 public:
 	static BlockFaceSettings assemble(string[] fields, Args...)(auto ref Args args) {

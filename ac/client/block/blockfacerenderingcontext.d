@@ -45,6 +45,7 @@ public:
 
 		string[string] defs = [ //
 		"ALPHA_CHANNEL" : de(settings.alphaChannel), //
+			"BACK_FACING_NORMAL" : de(settings.backFacingNormal), //
 			"WRAP" : de(settings.wrap), //
 
 			"CAMERA_VIEW_NEAR" : de(GameRenderer.cameraViewNear), //
@@ -59,7 +60,7 @@ public:
 
 			GLProgram program = new GLProgram("render/blockRender", [GLProgramShader.vertex, GLProgramShader.fragment], [ //
 					"DEPTH_ONLY" : de(i == ContextType.depthOnly), //
-					"NEAR_DEPTH_TEST" : de(i == ContextType.nearDepthTest) //
+					"NEAR_DEPTH_TEST" : de(i == ContextType.nearDepthTest), //
 					].merge(defs));
 
 			GLProgramContext context = new GLProgramContext(program);
