@@ -31,8 +31,8 @@ public:
 		settings_ = settings;
 		atlas_ = new BlockFaceAtlas( //
 				settings.resolution, id, //
-				settings.alphaChannel != BlockFaceSettings.AlphaChannel.alphaTest, //
-				settings.alphaChannel.among(BlockFaceSettings.AlphaChannel.alphaTest, BlockFaceSettings.AlphaChannel.transparency) > 0, //
+				!settings.alphaChannel.among(BlockFaceSettings.AlphaChannel.alphaTest, BlockFaceSettings.AlphaChannel.alphaTestGlow), //
+				settings.alphaChannel.among(BlockFaceSettings.AlphaChannel.alphaTest, BlockFaceSettings.AlphaChannel.transparency, BlockFaceSettings.AlphaChannel.alphaTestGlow) > 0, //
 				settings.wrap, //
 				settings.betterTexturing //
 				);
@@ -67,7 +67,7 @@ public:
 
 			context_[i] = context;
 
-			if (i != ContextType.depthOnly || settings_.alphaChannel == BlockFaceSettings.AlphaChannel.alphaTest)
+			if (i != ContextType.depthOnly || settings_.alphaChannel.among(BlockFaceSettings.AlphaChannel.alphaTest, BlockFaceSettings.AlphaChannel.alphaTestGlow))
 				context.bindTexture(1, atlas_.texture);
 
 			context.enable(GL_DEPTH_TEST);

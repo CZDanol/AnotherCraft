@@ -4,10 +4,10 @@
 #include "render/blockRender_common.glsl"
 #include "postprocessing/common.glsl"
 
-#define TEXTURING (!DEPTH_ONLY || (ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST))
-#define USES_ALPHA (ALPHA_CHANNEL == ALPHA_CHANNEL_TRANSPARENCY || ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST)
+#define TEXTURING (!DEPTH_ONLY || (ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST) || (ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST_GLOW))
+#define USES_ALPHA (ALPHA_CHANNEL == ALPHA_CHANNEL_TRANSPARENCY || ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST || ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST_GLOW)
 
-#if ALPHA_CHANNEL != ALPHA_CHANNEL_ALPHA_TEST && ALPHA_CHANNEL != ALPHA_CHANNEL_TRANSPARENCY
+#if !USES_ALPHA
 	layout(early_fragment_tests) in;
 #endif
 
@@ -36,11 +36,11 @@
 
 #if DEPTH_ONLY
 void main() {
-	#if ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST
+	#if ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST || ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST_GLOW
 		// Force nearest filtering (for performance)
 		const vec4 color = texelFetch(tex, ivec3(uv_ * textureSize(tex, 0).xy, layer_), 0);
 
-		if(color.a < 0.8)
+		if(color.a <= 0.5)
 			discard;
 	#endif
 }
@@ -94,7 +94,7 @@ void main() {
 
 	#if ALPHA_CHANNEL == ALPHA_CHANNEL_TRANSPARENCY
 		color = color_;
-	#elif ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST
+	#elif ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST || ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST_GLOW
 		if(color_.a <= 0.5)
 			discard;
 
@@ -103,14 +103,19 @@ void main() {
 		color = vec4(color_.rgb, 1);
 	#endif
 
-	#if ALPHA_CHANNEL == ALPHA_CHANNEL_GLOW
-		normal = vec4(norm_, 1 - color_.a);
-	#elif BACK_FACING_NORMAL == BACK_FACING_NORMAL_INVERT
-		normal = vec4(gl_FrontFacing ? norm_ : 1 - norm_, 1 - color_.a);
-	#elif BACK_FACING_NORMAL == BACK_FACING_NORMAL_INVERT_XY
-		normal = vec4(gl_FrontFacing ? norm_.xy : 1 - norm_.xy, norm_.z, 1 - color_.a);
+
+	#if ALPHA_CHANNEL == ALPHA_CHANNEL_GLOW || ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST_GLOW
+		normal.a = 1 - color_.a;
 	#else
-		normal = vec4(norm_, 0);
+		normal.a = 0;
+	#endif
+
+	#if BACK_FACING_NORMAL == BACK_FACING_NORMAL_INVERT
+		normal.rgb = gl_FrontFacing ? norm_ : 1 - norm_, 0;
+	#elif BACK_FACING_NORMAL == BACK_FACING_NORMAL_INVERT_XY
+		normal.rgb = vec3(gl_FrontFacing ? norm_.xy : 1 - norm_.xy, norm_.z);
+	#else
+		normal.rgb = norm_;
 	#endif
 }
 #endif

@@ -104,7 +104,7 @@ public:
 		// Don't care
 		settings.nonUniform = false;
 
-		if (!settings.alphaChannel.among(BlockFaceSettings.AlphaChannel.alphaTest, BlockFaceSettings.AlphaChannel.transparency))
+		if (!settings.alphaChannel.among(BlockFaceSettings.AlphaChannel.alphaTest, BlockFaceSettings.AlphaChannel.alphaTestGlow, BlockFaceSettings.AlphaChannel.transparency))
 			settings.backFacingNormal = BlockFaceSettings.BackFacingNormal.same;
 
 		if (auto it = settings in contextsAssoc_)

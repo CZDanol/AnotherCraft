@@ -5,7 +5,7 @@
 #include "render/blockRender_common.glsl"
 #include "util/hash.glsl"
 
-#define TEXTURING ((!DEPTH_ONLY) || (ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST))
+#define TEXTURING ((!DEPTH_ONLY) || (ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST) || (ALPHA_CHANNEL == ALPHA_CHANNEL_ALPHA_TEST_GLOW))
 
 layout(location = 0) uniform mat4 viewMatrix;
 layout(location = 1) uniform float worldTime;

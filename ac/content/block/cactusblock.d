@@ -13,6 +13,7 @@ public:
 			BlockFaceSettings cfg;
 			cfg.alphaChannel = BlockFaceSettings.AlphaChannel.alphaTest;
 			cfg.betterTexturing = true;
+			cfg.wrap = false;
 
 			BlockFaceSettings sideCfg = cfg;
 			sideCfg.cullFace = false;

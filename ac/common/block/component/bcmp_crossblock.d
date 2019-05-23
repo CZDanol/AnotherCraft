@@ -14,8 +14,11 @@ public:
 	version (client) void setFace(string filename, BlockFaceSettings cfg = BlockFaceSettings()) {
 		enforce(!face_);
 
-		cfg.alphaChannel = BlockFaceSettings.AlphaChannel.alphaTest;
+		if (cfg.alphaChannel != BlockFaceSettings.AlphaChannel.alphaTestGlow)
+			cfg.alphaChannel = BlockFaceSettings.AlphaChannel.alphaTest;
+
 		cfg.cullFace = false;
+		cfg.wrap = false;
 		cfg.backFacingNormal = BlockFaceSettings.BackFacingNormal.invertXY;
 
 		face_ = new BlockFace(filename, cfg);

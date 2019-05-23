@@ -7,39 +7,39 @@ void registerContent() {
 	{
 		auto block = new SimpleBlock("lampRed");
 		block.lightProperties.emitColor.x = Block.maxLightValue;
-		block.setFace(BlockFaceSettings.assemble!(["betterTexturing"])(true), "lampRed");
+		block.setFace(BlockFaceSettings.assemble!(["betterTexturing", "alphaChannel"])(true, BlockFaceSettings.AlphaChannel.glow), "lampRed");
 		content.block.lampR = block;
 	}
 
 	{
 		auto block = new SimpleBlock("lampGreen");
 		block.lightProperties.emitColor.y = Block.maxLightValue;
-		block.setFace(BlockFaceSettings.assemble!(["betterTexturing"])(true), "lampGreen");
+		block.setFace(BlockFaceSettings.assemble!(["betterTexturing", "alphaChannel"])(true, BlockFaceSettings.AlphaChannel.glow), "lampGreen");
 		content.block.lampG = block;
 	}
 
 	{
 		auto block = new SimpleBlock("lampBlue");
 		block.lightProperties.emitColor.z = Block.maxLightValue;
-		block.setFace(BlockFaceSettings.assemble!(["betterTexturing"])(true), "lampBlue");
+		block.setFace(BlockFaceSettings.assemble!(["betterTexturing", "alphaChannel"])(true, BlockFaceSettings.AlphaChannel.glow), "lampBlue");
 		content.block.lampB = block;
 	}
 
 	{
 		auto block = new SimpleBlock("lamp");
 		block.lightProperties.emitColor = Vec3U8(15, 13, 13);
-		block.setFace(BlockFaceSettings.assemble!(["betterTexturing"])(true), "lamp");
+		block.setFace(BlockFaceSettings.assemble!(["betterTexturing", "alphaChannel"])(true, BlockFaceSettings.AlphaChannel.glow), "lamp");
 		content.block.lamp = block;
 	}
 
 	{
 		auto block = new ComponentBlock("glowShroom");
 		block.lightProperties.opacity = 0;
-		block.lightProperties.emitColor = (Vec3F(86, 172, 151) / 255 * 0.7 * Block.maxLightValue).to!Vec3U8;
+		block.lightProperties.emitColor = (Vec3F(86, 172, 151) / 255 * 0.5 * Block.maxLightValue).to!Vec3U8;
 
 		auto rcmp = new BlockComponent_CrossBlock();
 		version (client)
-			rcmp.setFace("glowShroom");
+			rcmp.setFace("glowShroom", BlockFaceSettings.assemble!(["alphaChannel"])(BlockFaceSettings.AlphaChannel.alphaTestGlow));
 		block.addComponent(rcmp);
 
 		block.addComponent(new BlockComponent_BoxRayCast(Vec3F(0.3, 0.3, 0), Vec3F(0.7, 0.7, 0.5)));

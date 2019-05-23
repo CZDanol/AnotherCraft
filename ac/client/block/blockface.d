@@ -82,7 +82,8 @@ public:
 		unused,
 		alphaTest,
 		transparency,
-		glow
+		glow,
+		alphaTestGlow
 	}
 
 	enum BackFacingNormal : ubyte {
