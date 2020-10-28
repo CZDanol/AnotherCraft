@@ -1416,14 +1416,13 @@ where $\vec{n}$ is the normal of the camera,$\vec{n}_{light}$ is the normal of d
 
 Parameters affecting the appearance of the \textit{skybox} are passed to the \textit{shader} via uniform memory. The values are not constant, they are calculated by interpolation from preset values based on the time of day. The parameter values for the \textit{skybox} are determined by the \inlineDCode{WorldEnvironment} class (the implementation for the default world is in the \inlineDCode{WorldEnvironment_Overworld} class). At night, the moon is drawn in the same way that the sun is drawn during the day -- this includes \textit{shadow mapping}, \textit{god rays} and the daylight component in the lighting model. The design of this \textit{skybox} is not based on any publications.
 
-% Google said: Time of day in the application: in the morning
 \putImage[Time of day in the application: sunrise]{skybox1.\imagesExtension}{width=\textwidth}
 
 \vfill
 
 \putImage[Time of day in the application: morning]{skybox2.\imagesExtension}{width=\textwidth}
 
-\putImage[Time of day in the application: evening]{skybox3.\imagesExtension}{width=\textwidth}
+\putImage[Time of day in the application: sunset]{skybox3.\imagesExtension}{width=\textwidth}
 
 \vfill
 
