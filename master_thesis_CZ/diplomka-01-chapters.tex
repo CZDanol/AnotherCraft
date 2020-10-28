@@ -1,0 +1,2068 @@
+% !TeX spellcheck = cs_CZ
+% !TeX root = diplomka.tex
+\newcommand{\imagesExtension}{png}
+
+\chapter{Úvod}
+V roce 2009 byla společností Mojang vyvinuta hra Minecraft\footnote{\url{www.minecraft.net}}, která si v průběhu několika let získala širokou hráčskou základnu napříč mnoha věkovými kategoriemi a stala se fenoménem herního průmyslu. Vyznačuje se procedurálně generovaným nekonečným volumetrickým terénem, do kterého jsou hráči ovládající své herní postavy vpuštěni bez nějakého předem zadaného cíle. Hra nabízí zábavu více druhům hráčů: kreativní lidé mohou z jednotlivých voxelů stavět modely dle jejich fantazie, technicky zaměření jedinci mohou vymýšlet různé mechanismy (mechaniky hry umožňují vytvoření i např. jednoduchého CPU), hráči toužící po dobrodružství se mohou ponořit do \textit{survival} módu, kde musí těžit suroviny, stavět si pevnosti a bojovat s monstry o přežití.
+
+Mechanikami uvedenými ve hře Minecraft byla inspirována řada dalších titulů; dalo by se říct, že hra dala zrod celému novému hernímu žánru, pro který jsou typické otevřený procedurálně generovaný svět a \textit{survival} a \textit{crafting} mechaniky. Hra však není prvotním zdrojem těchto mechanik -- inspirace pro ně přišla od hry Infiniminer.
+
+\putImage[Hra Minecraft]{minecraftSshot.\imagesExtension}{width=0.9\textwidth}
+
+Cílem této práce je prozkoumat techniky použitelné pro vizualizaci volumetrického terénu ve hrách typu Minecraft, vybrané techniky implementovat v demonstrační aplikaci a~pokusit se je obohatit o akceleraci na GPU. Návrh a implementace aplikace jsou vedeny tak, aby mohly být v budoucnu rozšířeny na plnohodnotnou hru.
+
+V kapitolách \ref{ch:volumetricTerrain} a \ref{ch:graphicEffects} je proveden průzkum existujících metod pro procedurální generování, reprezentaci a vykreslování grafických modelů a dalších metod relevantních pro tuto práci. Kapitoly \ref{ch:design} a \ref{ch:impl} poté dokumentují návrh a implementaci aplikace a kapitola \ref{ch:app} se věnuje zhodnocení výsledného programu.
+
+\chapter{Volumetrický terén} \label{ch:volumetricTerrain}
+Pojem objemová (volumetrická) reprezentace terénu pouze říká, že veškerá data o terénu jsou vždy vztažena na tělesa o nějakém objemu situovaná v prostoru, který terén definuje. Tvar těles může být obecně libovolný a~různý v rámci jedné reprezentace. Tato práce pracuje s~krychlemi konstantní velikosti uspořádanými do pravidelné mřížky. Pojem \textit{voxel}, který pro tyto krychle budeme používat, obecně označuje nejmenší jednotku objemu v trojrozměrném diskrétním prostoru \cite{ZaraJiri2004Mpg}. Data, která jsou k voxelům vztažena, mohou být v nejjednodušším případě pouze informace, zda daný voxel reprezentuje hmotu, nebo prázdný prostor. Mohou se ale uchovávat i detailnější informace jako např. barva, materiál nebo jiné optické či fyzické vlastnosti.
+
+\putImage[Voxelová reprezentace koule]{voxelKoule.\imagesExtension}{width=6cm}
+
+Práci s terénem lze koncepčně rozdělit na tři části: jeho generování, správu a vykreslování. Správou terénu se rozumí jeho uchovávání v paměti a na disku, v případě nestatického terénu i řízení jeho úprav. Pro tuto kapitolu uvažujme terén jako funkci
+\begin{equation}\label{volumetricTerrainDefinition}
+	ter(x,y,z) : \mathcal{Z} \times \mathcal{Z} \times \mathcal{Z} \rightarrow \{true, false\} \text{,}
+\end{equation}
+kde $x$, $y$ a $z$ jsou souřadnice v kartézském trojrozměrném prostoru a hodnota funkce reprezentuje, zda se na dané souřadnici nachází nebo nenachází hmota. Osy $x$ a $y$ umístíme do horizontální roviny a osa $z$ reprezentuje výškovou souřadnici.
+
+\section{Procedurální generování volumetrického terénu} \label{sect:procGenPrinciples}
+Procedurální generování pro účely této práce znamená nalezení takové funkce $ter$ (viz rovnice \ref{volumetricTerrainDefinition}), pro kterou je možná efektivní implementace pro soudobý hardware. Dále musí mít vygenerovaný terén určitou míru realismu. Očekáváme rysy jako hory, nížiny, koryta řek, jeskyně apod. Všeobecně nehledáme jeden konkrétní terén, ale funkci schopnou generovat různé terény mající tyto rysy. To můžeme formálně zapsat jako
+\begin{equation}
+	proc(\vv{pos}, seed): \mathcal{Z}^3 \times \mathcal{N}_0 \rightarrow \{true, false\} \text{,}
+\end{equation}
+kde různé hodnoty parametru $seed$ rozlišují různé terény.
+
+Metody níže zmíněné pracují se spojitým prostorem a mají spojitý výstup:
+\begin{equation}
+	proc_\mathcal{R}(\vv{pos}, seed): \mathcal{R}^3 \times \mathcal{N}_0 \rightarrow \mathcal{R} \text{.}
+\end{equation}
+Definujeme tedy prahovou hodnotu $t \in \mathcal{R}$ pro výstup a měřítko $\vv{s} \in \mathcal{R}^3$, které vztahuje velikost voxelu k rozměrům reálného světa:
+\begin{equation}
+	proc(\vv{pos}, seed) = proc_\mathcal{R}(\vv{pos} \otimes \vv{s}, seed) > t \text{,}
+\end{equation}
+kde $\vv{a} \otimes \vv{b}$ je operace skalárního násobení mezi jednotlivými komponentami vektorů. Pro generování trojrozměrného terénu lze využít i funkce pracující se dvěma rozměry. Hodnota funkce v bodu $x$, $y$ potom udává výšku sloupce terénu na daných souřadnicích:
+\begin{equation}
+	proc(\vv{pos}, seed) = proc_{2\mathcal{R}}(\vv{pos}_{xy} \otimes \vv{s}_{xy}, seed) < \vv{pos}_z \cdot \vv{s}_z \text{.}
+\end{equation}
+
+\subsection{Perlinův šum}
+Perlinův šum (angl. \textit{Perlin noise}) je hojně využívaná metoda pro generování šumu vytvořená Kenem Perlinem \cite{Perlin:1985:IS:325165.325247,PerlinKen2002In}. "Vzhled" šumu je vhodný pro širokou škálu aplikací, jako například vytváření textur přírodních materiálů, ohně, kouře, mraků. Metoda je aplikovatelná pro libovolný počet dimenzí, trojrozměrná varianta se dá využít pro generování terénů nebo 3D textur. Pro výstupy měnící se s časem (např. mraky) lze přidat čas jako další rozměr.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/2dperlin.\imagesExtension}
+		\caption{2D Perlinův šum}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/3dperlin.\imagesExtension}
+		\caption{Volumetrický terén generovaný 3D Perlinovým šumem}
+	\end{minipage}
+\end{figure}
+
+Výpočet hodnoty šumu se provede takto: nad prostorem je zavedena jednotková ortogonální mřížka. Pro každý uzel mřížky je pseudonáhodně určena hodnota $\vv{grad}$ ($D$ je dimenze šumu):
+\begin{equation}
+	\vv{grad}(\vv{pos}, seed): \mathcal{Z}^D \times \mathcal{N} \rightarrow \mathcal{Z}^D \text{.}
+\end{equation}
+Pro 2D šum jsou doporučeny vektory jednotkové délky, pro 3D Perlin určuje 12 vektorů (jedná se o vektory do středů hran jednotkové krychle), ze kterých se má pseudonáhodně vybírat. Z mřížky se kolem bodu $\vv{pos}$, pro který chceme zjistit hodnotu šumu, vybere $2^D$ uzlů $\vv{node}_{i \in \langle1, 2^D\rangle}$ tvořící $D$-rozměrnou krychli s délkou strany jedna. Pro každý z těchto uzlů je vypočtena hodnota $dot$ jako
+\begin{equation}
+dot_i(\vv{pos}, seed) = \mathbin{\color{darkgreen}(\vv{pos} - \vv{node}_i)} \cdot \mathbin{\color{darkred}\vv{grad}(\vv{node}_i, seed)} \text{.}
+\end{equation}
+
+\vspace{5mm}
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=0.9]
+		\pgfmathsetmacro{\xone}{0}
+		\pgfmathsetmacro{\xtwo}{7}
+		\pgfmathsetmacro{\yone}{0}
+		\pgfmathsetmacro{\ytwo}{7}
+		
+		% grid
+		\draw[step=2cm,gray,dashed,very thin] (\xone,\yone) grid (\xtwo,\ytwo);
+		
+		% axes
+		\draw[black,thick,->] (\xone, 0) -- (\xtwo, 0) node[right] {$x$};
+		\draw[black,thick,->] (0, \yone) -- (0, \ytwo) node[above] {$y$};
+		
+		\draw [black] (2, 2) node[left] {$\vv{node}$};
+		
+		\draw[very thick, darkred,->] (2, 2) -- (3, 1.7) node[right] {$\vv{grad}$};
+		\draw[very thick, darkred,->] (4, 2) -- (3.5, 3);
+		\draw[very thick, darkred,->] (2, 4) -- (1.6, 4.9);
+		\draw[very thick, darkred,->] (4, 4) -- (5, 3.7);
+		
+		\draw[very thick, darkgreen,->] (2, 2) -- (2.6, 3.3) node[right] {$\vv{pos}$};
+		\draw[very thick, darkgreen,->] (4, 2) -- (2.6, 3.3);
+		\draw[very thick, darkgreen,->] (2, 4) -- (2.6, 3.3);
+		\draw[very thick, darkgreen,->] (4, 4) -- (2.6, 3.3);
+		\end{tikzpicture}
+		\caption{Vizualizace gradientů a mřížky u 2D Perlinova šumu}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=1.9]
+		\draw[thin, dotted] (0, 0) -- (2, 0);
+		\draw[thin, dotted] (0, 2) -- (2, 2);
+		\draw[thin, dotted] (0, 0) -- (0, 2);
+		\draw[thin, dotted] (2, 0) -- (2, 2);
+		
+		\draw[thin, dotted] (1, 1) -- (3, 1);
+		\draw[thin, dotted] (1, 3) -- (3, 3);
+		\draw[thin, dotted] (1, 1) -- (1, 3);
+		\draw[thin, dotted] (3, 1) -- (3, 3);
+		
+		\draw[thin, dotted] (0, 0) -- (1, 1);
+		\draw[thin, dotted] (0, 2) -- (1, 3);
+		\draw[thin, dotted] (2, 0) -- (3, 1);
+		\draw[thin, dotted] (2, 2) -- (3, 3);
+		
+		%\node at (1.5,1.5) {\textbullet};
+		
+		\draw[thick, ->] (0, 0) -- (1, 0);
+		\draw[thick, ->] (2, 0) -- (1, 0);
+		
+		\draw[thick, ->] (0, 2) -- (1, 2);
+		\draw[thick, ->] (2, 2) -- (1, 2);
+		
+		\draw[thick, ->] (1, 1) -- (2, 1);
+		\draw[thick, ->] (3, 1) -- (2, 1);
+		
+		\draw[thick, ->] (1, 3) -- (2, 3);
+		\draw[thick, ->] (3, 3) -- (2, 3);
+		
+		\draw[thick, ->] (1, 0) -- (1.5, 0.5);
+		\draw[thick, ->] (2, 1) -- (1.5, 0.5);
+		
+		\draw[thick, ->] (1, 2) -- (1.5, 2.5);
+		\draw[thick, ->] (2, 3) -- (1.5, 2.5);
+		
+		\draw[thick, ->] (1.5, 0.5) -- (1.5, 1.5);
+		\draw[thick, ->] (1.5, 2.5) -- (1.5, 1.5);
+		
+		\draw (0, 0) node[anchor=east] {1};
+		\draw (2, 0) node[anchor=west] {2};
+		\draw (0, 2) node[anchor=east] {3};
+		\draw (2, 2) node[anchor=west] {4};
+		
+		\draw (1, 1) node[anchor=east] {5};
+		\draw (3, 1) node[anchor=west] {6};
+		\draw (1, 3) node[anchor=east] {7};
+		\draw (3, 3) node[anchor=west] {8};
+		
+		\draw (1.5, 1.5) node[anchor=east] {$\vv{pos}$};
+		\end{tikzpicture}
+		\caption{Vizualizace interpolace mezi gradienty uzlů mřížky u 3D Perlinova šumu}
+		\label{perlinInterpolation}
+	\end{minipage}	
+\end{figure}\vspace{5mm}
+
+
+Výsledná hodnota šumu je potom získána interpolací mezi hodnotami $dot_i$:
+\begin{equation}
+	perlin(\vv{pos}, seed) = \sum_{i=1}^{2^D} dot_i(\vv{pos}) \cdot \prod_{j=1}^{D} ipol(1 - |\vv{pos}[j] - \vv{node}_i[j]|) \text{.}
+\end{equation}
+Protože pracujeme s jednotkovou mřížkou, $|\vv{pos}[j] - \vv{node}_i[j]|$ bude vždy ležet v intervalu $\langle 0, 1 \rangle$. Jako interpolační funkci $ipol$ Perlin \cite{PerlinKen2002In} definuje
+\begin{equation}
+	ipol(x) = 6x^5 - 15x^4 + 10x^3 \text{,}
+\end{equation}
+která má pro body $x = 0$ a $x = 1$ nulovou první a druhou derivaci. Výpočet interpolace lze také alternativně chápat jako postupné interpolování mezi dvojicemi hodnot, viz obrázek~\ref{perlinInterpolation}. Pro esteticky zajímavější výsledky se šum běžně kombinuje v různých měřítkách a~amplitudách:
+\begin{equation}
+	moPerlin(\vv{pos}, seed) = \sum_{o = 1}^{O} perlinNoise(\vv{pos} \cdot s^o, seed) \cdot p^{(o-1)} \text{,}
+\end{equation}
+kde $O$ je počet kombinovaných šumů, $s$ je úbytek měřítka a $p$ je úbytek amplitudy. Složky takovéhoto šumu nazýváme také oktávy.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/mo2dPerlin.\imagesExtension}
+		\caption{Výsledek kombinování více 2D Perlinových šumů s různými amplitudami a~frekvencemi}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/mo3dPerlin.\imagesExtension}
+		\caption{Volumetrický terén generovaný multioktávovým 3D Perlinovým šumem}
+	\end{minipage}
+\end{figure}
+
+\subsection{Simplex šum}
+Simplex šum vytvořil Ken Perlin \cite{Perlin2002} jako \textit{lepší} alternativu k Perlinovu šumu. Jako vylepšení uvádí Perlin mj. izotropii (tj. nezávislost povahy šumu na směru, kterou původní verze nemá), větší výpočetní efektivitu a lepší škálování do více rozměrů. Zatímco u~původního Perlinova šumu rostl počet vektorových operací s dimenzí exponenciálně, u~nového šumu roste lineárně. Srovnání principů algoritmů shrnuje Stefan Gustavson ve svém článku~\cite{Gustavson2005}.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/2dsimplex.\imagesExtension}
+		\caption{2D Simplex šum}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/3dsimplex.\imagesExtension}
+		\caption{Volumetrický terén generovaný 3D Simplex šumem}
+	\end{minipage}
+\end{figure}
+
+Primární rozdíl spočívá v mřížce, která v Simplex šumu nerozděluje prostor do $D$-roz\-měrných krychlí, ale do tzv. \textit{simplexů}, které mají pouze $D+1$ vrcholů (oproti $2^D$ u~krychlí).
+
+Pro určení vrcholů simplexu, ve kterém se nachází bod $\vv{pos}$, se využívá této transformace souřadnic:
+\begin{equation}
+	skew(\vec{v}) = \vec{v} + \dfrac{\sqrt{D + 1} - 1}{D} \cdot \sum_{d = 1}^{D} \vec{v}[d] \text{,}
+\end{equation}
+kde $D$ je dimenzionalita šumu. Zpětná transformace má vzorec
+\begin{equation}
+	unskew(\vec{v}) = \vec{v} - \dfrac{1}{D} \left(1 - \dfrac{1}{\sqrt{D + 1}}\right) \cdot \sum_{d = 1}^{D} \vec{v}[d] \text{.}
+\end{equation}
+
+Pozice prvního vrcholu (nejbližšího k počátku souřadného systému) simplexu se vypočte jako
+\begin{equation}
+	\vv{node}_1 = unskew(\lfloor skew(\vv{pos}) \rfloor) \text{.}
+\end{equation}
+Zbylých $D$ vrcholů se vypočte tak, že se k pozici předchozího vrcholu $\vv{node}_{i-1}$ přičte $unskew(\vv{k})$, kde $\vv{k}$ má právě v jedné souřadnici $s$ jedničku ($\vv{k}[s] = 1$) a ve zbylých nulu. Hodnota $s$ pro každou $\vv{node}_{i}$ je dána následovně: seřadíme indexy souřadnic vektoru $\vv{offset} = \vv{vec} - \vv{node}_1$ sestupně podle hodnoty dané souřadnice. Potom pro $\vv{node}_i = \vv{node}_{i-1} + \vv{vec}[s]$ je $s$ dáno jako index největší souřadnice vektoru $\vv{offset}$ pro $i = 2$, druhý největší pro $i = 3$ a tak dále. Pro vrcholy se pseudonáhodně vygenerují gradienty stejně jako u Perlinova šumu. Výsledná hodnota šumu se poté vypočte jako
+\begin{equation}
+	simplex(\vv{pos}, seed) = \sum_{i=1}^{D+1} max(0, 0.6 - |\vv{o}_i|^2) \cdot \left( \vv{o}_i \cdot \vv{grad}(\vv{node}_i, seed) \right) \text{,}
+\end{equation}
+kde $\vv{o}_i = \vv{pos} - \vv{node}_i$.
+
+\subsection{Voroného diagramy} \label{voronoiDiagrams}
+Mějme $D$-rozměrný prostor a množinu bodů $P \subset \mathcal{R}^D$ náhodně rozmístěných v prostoru. Prostor rozdělíme do regionů dle těchto bodů: ke každému bodu v prostoru $s \in \mathcal{R}^D$ určíme nejbližší bod $p \in P$. Tato struktura se jmenuje Voroného diagram \cite{Boissonnat2010}.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/voronoiwiki.pdf}
+		\caption{Euklidovský 2D Voroného diagram}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/voronoiTerrain.\imagesExtension}
+		\caption{Volumetrický terén generovaný 3D Voroného diagramem}
+	\end{minipage}
+\end{figure}
+
+Díky své buněčné struktuře mohou být Voroného diagramy dobrým základem např. pro generování textur organických materiálů, kamenitých materiálů nebo mozaik. Dají se využít pro generování parcel nebo hranic regionů. Zaměříme-li se na hrany mezi regiony, ty se dají využít např. pro pobřežní linie nebo cesty mezi městy, která se nachází na uzlech. Samotný tvar diagramu může být inspirací uměleckého stylu -- škála možných využití je široká. Volbou jiné metriky než Euklidovské lze vlastnosti diagramů dále upravovat a~nacházet další možnosti aplikací. To demonstruje obrázek \ref{e4MetricVoronoi}, který je generovaný s metrikou
+\begin{equation}
+	\rho(\vv{a}, \vv{b}) = \sqrt[4]{|\vv{a}_x - \vv{b}_x|^4 + |\vv{a}_y - \vv{b}_y|^4 + |\vv{a}_z - \vv{b}_z|^4} \text{.}
+\end{equation}
+Každému bodu v prostoru lze také přiřadit číselná hodnota odpovídající vzdálenosti \mbox{k~(n-tému)} nejbližšímu bodu $p \in P$ -- tento přístup využívá šum navržený Stevenem Worleym~\cite{Worley1996}.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/voronoie4.\imagesExtension}
+		\caption[]{Volumetrický terén generovaný Voroného diagramem s neeuklidovskou metrikou}
+		\label{e4MetricVoronoi}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.48\textwidth}
+		\centering
+		\includegraphics[height=6cm]{obrazky-figures/voronoiMountains.\imagesExtension}
+		\caption{Volumetrický terén generovaný z výškové mapy založené na 2D Voroného diagramu; výška stoupá se~vzdáleností od nejbližšího bodu $p \in P$}
+		\label{mountainsVoronoi}
+	\end{minipage}
+\end{figure}
+
+Pro náš formalismus přiřadíme také každému bodu $p \in P$ pseudonáhodně hodnotu $v_p \in \langle0,1\rangle$. Poté
+\begin{equation}
+	voronoi(\vv{pos}, seed) = v_p \text{, kde $\vec{p} \in P$ a $\rho(\vv{pos}, \vec{p})$ je minimální mezi všemi $\vec{p} \in P$.}
+\end{equation}
+
+\subsection{L-systémy}
+Téma Lindenmayerových systémů (L-systémů) je příliš komplexní na to, aby bylo vhodné zahrnout je celé do této práce. Metodicky jej zpracovává například Prusinkiewicz ve své knize \cite{OstebeeArnold1997TABo}. Ve stručnosti jsou L-systémy definovány jako trojice $H = (V, P, \omega)$, kde $V$ je množina symbolů, $P$ množina pravidel ve tvaru $a \rightarrow x$, kde $a \in V$, $x \in V^*$ a $\omega \in V^+$ je počáteční řetězec. Podle pravidel v $P$ se počáteční řetězec $\omega$ po určitý počet iterací přepisuje, až vznikne nějaký řetězec $\alpha$. Tento řetězec se poté graficky interpretuje (k tomu se využívá agent, který jednotlivé symboly řetězce vykonává jako instrukce).
+
+Jsou definovány různé druhy L-systémů; ty zavádějí mj. stochastickou aplikaci pravidel (stochastické L-systémy), větvení v grafické interpretaci (závorkové L-systémy) nebo rozšíření symbolů a pravidel o dodatečné parametry (parametrické L-systémy).
+Pro tuto práci by L-systémy mohly nalézt uplatnění při procedurálním generování stromů, trávy nebo jiné vegetace.
+
+\putImage[Keř generovaný D0L-systémem, přejato z \cite{SojmaZdenek2009Laja}]{lSystem.\imagesExtension}{width=6cm}
+
+\section{Reprezentace volumetrického terénu}
+Pakliže lze terén vyjádřit funkcí $ter(x, y, z) \rightarrow \{true, false\}$ z \ref{volumetricTerrainDefinition}, lze teoreticky přímo použít tuto funkci při vizualizaci a generovaný terén není třeba jakkoli uchovávat. Taková funkce bude ale v praxi příliš výpočetně náročná na to, aby bylo vhodné ji volat s~frekvencí několika desítek invokací za vteřinu pro každý voxel ve vykreslované scéně. Přitom funkci stačí vypočíst pro každý voxel jen jednou a výsledky uložit do vhodné struktury. Součástí zadání práce je navíc možnost terén upravovat, takže potřebujeme nějakým způsobem uchovávat alespoň příznaky změn.
+
+Jako referenční hodnotu pro porovnávání paměťové náročnosti reprezentace dat uvažujme oblast 1024×1024×256, tedy přibližně 270 milionů voxelů. Dále uvažujme čtyři bajty informací na voxel, což odpovídá přibližně 1 GB paměti. V případě (teoreticky) nekonečného procedurálně generovaného světa bude však s pohybem kamery po scéně, a tedy generováním dalších částí terénu, objem terénu růst. Proto a~pro umožnění persistence dat je nutné uvažovat mechanismus pro odkládání částí terénu z~paměti na disk.
+
+\subsection{Pole}
+Relevantním řešením je umístění záznamu o každém voxelu do třírozměrného pole. Tento způsob uložení dat umožňuje náhodné čtení i zápis v konstantním čase. Pokud by měl ale celý terén být uložen v jednom poli, při jeho rozšiřování by bylo třeba pole realokovat, přičemž čas potřebný na realokaci lineárně stoupá s objemem terénu. Řešení také neumožňuje odkládání částí terénu na disk.
+
+Pole by tedy bylo vhodnější kombinovat s další datovou strukturou, například \textit{hashovací} tabulkou. Terén by se rozdělil na regiony o fixní velikosti; v rámci těchto regionů by byly voxely uloženy ve statickém poli. Odkazy na regiony by byly uloženy v \textit{hashovací} tabulce, klíč by určoval pozici ve světě.
+Tato hybridní kombinace si stále uchovává konstantní čas náhodného čtení i zápisu, přičemž přístup k voxelům v rámci jednoho regionu by byl díky statickému poli velice rychlý, stejně tak i iterace. Implementace odkládání regionů na disk by v tomto případě byla triviální.
+
+Nevýhodou tohoto způsobu ukládání dat je, že neumožňuje efektivněji reprezentovat velké homogenní regiony v rámci jednoho pole. Pokud například region obsahuje z 50 \% vzduch v souvislém objemu, jiná datová struktura by mohla umožnit menší prostorovou náročnost.
+
+\subsection{Sparse voxel octree}
+Řídký oktalový strom (\textit{sparse voxel octree} -- SVO) je stromová datová struktura, kde každý uzel je buď list nebo má právě osm potomků. Každý uzel reprezentuje prostorový region, typicky krychli, a pakliže se nejedná o list, tak jeho osm potomků rozděluje tento region na osm menších částí (typicky krychlí o poloviční délce strany vůči rodiči). V~našem případě listy představují oblasti terénu se stejnou hodnotou funkce $ter(x, y, z)$.
+
+\vspace{5mm}
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}[scale=1.5]
+	
+	% Vypln
+	\fill[darkbrown] (1,0) -- (2,0) -- (2,1) -- (1,1) -- cycle;
+	\fill[darkbrown] (2,0) -- (2,1) -- (3,2) -- (3,1) -- cycle;
+	\fill[darkbrown] (2,1) -- (2,2) -- (2.5,2.5) -- (2.5,1.5) -- cycle;
+	\fill[darkbrown] (1.5,2) -- (2,2) -- (2.5,2.5) -- (2,2.5) -- cycle;
+	\fill[darkbrown] (1,1) -- (2,1) -- (2,1.5) -- (1,1.5) -- cycle;
+	\fill[darkbrown] (1.5,1.5) -- (2,1.5) -- (2,2) -- (1.5,2) -- cycle;
+	\fill[darkbrown] (0,0) -- (1,0) -- (1,0.5) -- (0,0.5) -- cycle;
+	\fill[darkbrown] (0.5,0.5) -- (1,0.5) -- (1,1) -- (0.5,1) -- cycle;
+	
+	\filldraw[fill=darkerbrown, thin] (0,0.5) -- (0.5,1) -- (0.5,0.5) -- cycle;
+	\filldraw[fill=darkerbrown, thin] (0.5,1) -- (1,1.5) -- (1,1) -- cycle;
+	\filldraw[fill=darkerbrown, thin] (1,1.5) -- (1.5,2) -- (1.5,1.5) -- cycle;
+	\filldraw[fill=darkerbrown, thin] (2.5,1.5) -- (3,2) -- (2.5,2) -- cycle;
+	
+	% Obrysy
+	\draw[thin, dotted] (0, 1) -- (1, 2);
+	\draw[thin, dotted] (1, 3) -- (1, 1.5);
+	\draw[thin, dotted] (2, 3) -- (2, 2.5);
+	\draw[thin, dotted] (0.5, 1.5) -- (1.5, 1.5);
+	\draw[thin, dotted] (0.25, 1.25) -- (0.75, 1.25);
+	\draw[thin] (0.75, 1.25) -- (1, 1.25);
+	\draw[thin, dotted] (0.25, 1.25) -- (0.25, 0.75);
+	\draw[thin, dotted] (0.5, 1.5) -- (0.5, 1);
+	\draw[thin] (0.25, 0.75) -- (0.5, 0.75);
+	\draw[thin] (1.25, 1.75) -- (1.5, 1.75);
+	
+	\draw[thin, dotted] (1.5, 2.5) -- (1.5, 2);
+	\draw[thin, dotted] (1.25, 2.25) -- (1.25, 1.75);
+	
+	\draw[thin] (0, 0) -- (2, 0);
+	\draw[thin] (0, 2) -- (2, 2);
+	\draw[thin] (0, 0) -- (0, 2);
+	\draw[thin] (2, 0) -- (2, 2);
+	
+	\draw[thin] (1, 3) -- (3, 3);
+	\draw[thin] (3, 1) -- (3, 3);
+	
+	\draw[thin] (0, 2) -- (1, 3);
+	\draw[thin] (2, 0) -- (3, 1);
+	\draw[thin] (2, 2) -- (3, 3);
+	
+	\draw[thin] (0, 1) -- (2, 1);
+	\draw[thin] (2, 1) -- (3, 2);
+	
+	\draw[thin] (1, 0) -- (1, 2);
+	\draw[thin] (1, 2) -- (2, 3);
+	
+	\draw[thin] (0.5, 2.5) -- (2.5, 2.5);
+	\draw[thin] (2.5, 2.5) -- (2.5, 0.5);
+	
+	\draw[thin] (0, 0.5) -- (1, 0.5);
+	\draw[thin] (0.5, 0) -- (0.5, 1);
+	
+	\draw[thin] (1, 1.5) -- (2, 1.5);
+	\draw[thin] (2, 1.5) -- (2.5, 2);
+	\draw[thin] (1.5, 1) -- (1.5, 2);
+	\draw[thin] (1.5, 2) -- (2, 2.5);
+	\draw[thin] (1.25, 2.25) -- (2.25, 2.25);
+	\draw[thin] (2.25, 2.25) -- (2.25, 1.25);
+ 
+	\end{tikzpicture}
+	\caption{Vizualizace reprezentace volumetrického terénu pomocí \textit{octree}}
+\end{figure}\vspace{5mm}
+
+Při náhodném přístupu se struktura prochází sestupně od kořene; náhodné čtení bude mít tedy časovou složitost $O(\log n)$, kde $n$ je objem scény. Čtení bude zahrnovat $O(\log n)$ nesekvenčních přístupů k paměti, což může být dále zpomalováno výpadky \textit{cache}. Zápis má stejnou časovou složitost i stejné problémy a může dynamicky alokovat a dealokovat paměť při rozdělování původně listových uzlů a naopak.
+
+SVO může značně snížit nároky na paměť i výkon v případě, že terén obsahuje veliké homogenní oblasti; celou takovou oblast lze v ideálním případě reprezentovat jedním listem oktalového stromu a vykreslit jako jeden velký blok. Naopak v nejhorší situaci, kdy mají sousední voxely vždy různou hodnotu (střídá se prázdný a plný), může být prostorová i~časová náročnost několikařádově vyšší než v případě statického pole.
+
+Odkládání podstromů na disk je pro SVO jednoduše realizovatelné. Pro zabránění snižování výkonu se zvětšujícím se terénem je však vhodné datovou strukturu kombinovat s~\textit{hashovací} tabulkou, stejně jako v případě statického pole.
+
+\subsection{3D textura na GPU}
+
+Při ukládání voxelové scény na GPU lze využít 3D textur, které zajišťují efektivní datovou strukturu i funkce pro čtení a zápis. Konkrétní formát ukládání dat není na úrovni grafických knihoven definován a může se v závislosti na ovladačích/grafické kartě lišit. Giesen \cite{Giesen1712011} popisuje používané metody ukládání dat textur na GPU, které vycházejí z lineární paměti s tím, že se zavádí \textins{swizzling}, při kterém se permutují bity adresy texelu. Vhodnou volbou permutace lze dosáhnout snížení vzdálenosti adres sousedních texelů textury, např. vytvořením tzv. \textit{Z-order}. Tato metoda nijak nenavyšuje velikost textury, ukládání voxelové scény v GPU texturách by tedy mělo využívat stejné množství paměti jako lineární pole na CPU.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.33\textwidth}
+		\centering
+		\begin{tikzpicture}		
+		% axes
+		\draw (0,0) grid (4,4);
+		
+		\draw (0.5, 3.5) node {0};
+		\draw (1.5, 3.5) node {1};
+		\draw (2.5, 3.5) node {2};
+		\draw (3.5, 3.5) node {3};
+		
+		\draw (0.5, 2.5) node {4};
+		\draw (1.5, 2.5) node {5};
+		\draw (2.5, 2.5) node {6};
+		\draw (3.5, 2.5) node {7};
+		
+		\draw (0.5, 1.5) node {8};
+		\draw (1.5, 1.5) node {9};
+		\draw (2.5, 1.5) node {10};
+		\draw (3.5, 1.5) node {11};
+		
+		\draw (0.5, 0.5) node {12};
+		\draw (1.5, 0.5) node {13};
+		\draw (2.5, 0.5) node {14};
+		\draw (3.5, 0.5) node {15};
+		\end{tikzpicture}
+	\end{minipage}
+	\begin{minipage}[t]{0.33\textwidth}
+		\centering
+		\begin{tikzpicture}		
+		\draw (0,0) grid (4,4);
+		
+		\draw (0.5, 3.5) node {0};
+		\draw (1.5, 3.5) node {1};
+		\draw (2.5, 3.5) node {4};
+		\draw (3.5, 3.5) node {5};
+		
+		\draw (0.5, 2.5) node {2};
+		\draw (1.5, 2.5) node {3};
+		\draw (2.5, 2.5) node {6};
+		\draw (3.5, 2.5) node {7};
+		
+		\draw (0.5, 1.5) node {8};
+		\draw (1.5, 1.5) node {9};
+		\draw (2.5, 1.5) node {12};
+		\draw (3.5, 1.5) node {13};
+		
+		\draw (0.5, 0.5) node {10};
+		\draw (1.5, 0.5) node {11};
+		\draw (2.5, 0.5) node {14};
+		\draw (3.5, 0.5) node {15};
+		
+		\draw[green]
+			(0.5, 3.5) -- (1.5, 3.5) -- (0.5, 2.5) -- (1.5, 2.5)
+			-- (2.5, 3.5) -- (3.5, 3.5) -- (2.5, 2.5) -- (3.5, 2.5)
+			-- (0.5, 1.5) -- (1.5, 1.5) -- (0.5, 0.5) -- (1.5, 0.5)
+			-- (2.5, 1.5) -- (3.5, 1.5) -- (2.5, 0.5) -- (3.5, 0.5);
+		\end{tikzpicture}
+	\end{minipage}
+	\caption{Demonstrace \textit{Z-order swizzlingu} při ukládání 2D texturových dat na GPU}
+\end{figure}
+
+\section{Vizualizace volumetrického terénu} \label{terrainVisualisation}
+Elvins ve svém přehledu \cite{ElvinsT1992Asoa} rozděluje metody vizualizace volumetrického terénu na metody přímého vykreslování (\textit{direct volume rendering, DVR}) a metody realizující převod na hraniční reprezentaci (\textit{surface-fitting, SF}).
+
+\subsection{Metody přímého vykreslování}
+Metody přímého vykreslování, jak název napovídá, pracují s volumetrickými daty "přímo" -- tedy si nevytváří jejich geometrickou reprezentaci. V kontextu této práce to znamená, že se terén nebude vykreslovat "kostka po kostce". Typickým představitelem \textit{DVR} je \textit{ray casting}: pro každý pixel obrazovky je do scény "vržen" paprsek, barva pixelu je pak určena podle voxelu, který odpovídající paprsek protne.
+
+\vspace{5mm}
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}[scale = 1.5]
+	
+	\drawcube{0}{0}{-1.5}{brown}
+	\drawcube{1}{0}{-1.5}{brown}
+	\drawcube{1}{1}{-1.5}{green}
+	
+	\draw[thick, ->] (0.5, -0.5, -2) -- (0.5, -0.5, -3);
+	\drawcube{1}{0}{-0.5}{blue, fill opacity=0.5}
+	
+	
+	\draw[step=1] (-1.5,-1.5) grid (1.5,1.5);
+	
+	\draw[thick, ->] (-0.5, -0.5, 0) -- (-0.5, -0.5, -3);
+	\draw[fill=darkbrown] (-0.5, -0.5) circle (0.15);
+	
+	\draw[thick] (0.5, -0.5, 0) -- (0.5, -0.5, -2);
+	\draw[fill=darkblue!50!darkbrown] (0.5, -0.5) circle (0.15);
+	
+	\draw[thick, ->] (0.5, 0.5, 0) -- (0.5, 0.5, -3);
+	\draw[fill=darkgreen] (0.5, 0.5) circle (0.15);
+	
+	\draw[thin, dotted] (-0.5, 0.5, 0) -- (-0.5, 0.5, -5);
+	\draw[] (-0.5, 0.5) circle (0.15);
+	
+	
+	\end{tikzpicture}
+	\caption{Ilustrace principu \textit{ray castingu}}
+\end{figure}\vspace{5mm}
+
+Průchod paprsku nemusí být zastaven prvním neprázdným voxelem: daný voxel může být částečně průhledný. V tom případě paprsek pokračuje dál a výsledná barva se míchá. Metoda \textit{ray castingu} není osvětlovací technika, ale pouze vizualizační. Existují metody, které s paprsky pracují i za účelem fotorealistického osvětlení (typickým příkladem je \textit{ray tracing}) -- ty jsou zmíněny níže v~oddílu \ref{lighting}.
+
+\subsection{Metody založené na hraniční reprezentaci}
+\textit{Surface-fitting} metody převádějí volumetrická data na hraniční reprezentaci, která je poté vykreslována tradičními technikami. V naší situaci je nejjednodušší takovou technikou prosté vykreslení stěn neprázdných voxelů v terénu. Ta produkuje vždy kolmé stěny, z~čehož je zřetelně vidět krychlová struktura. Tuto strukturu potlačuje například metoda \textit{marching cubes} naznačená v obrázku \ref{marchingCubes}. Existují i další metody, které pracují s křivkami a normálovými vektory a které se snaží hraničně reprezentovat i částečně průhledná voxelová data; lze se o~nich dočíst například v knize Moderní počítačová grafika \cite{ZaraJiri2004Mpg}.
+
+\putImage[\label{marchingCubes}Varianty reprezentace hranic voxelů v metodě \textit{marching cubes}, převzato z \cite{CirneMarcos2013Mctf}]{marchingCubes.\imagesExtension}{height=5cm}
+
+\chapter{Grafické efekty} \label{ch:graphicEffects}
+Ve skutečném světě je obraz, který vnímáme, zprostředkován fotony, které dopadají na sítnici našeho oka. Ačkoli lidské oko je schopné detekovat dopad jediného fotonu \cite{TinsleyJonathan2016Ddoa}, za denního světla na sítnici našeho oka dopadají desítky bilionů fotonů za vteřinu.\footnote{Velmi přibližný odhad, dle \url{https://physics.stackexchange.com/questions/329971}} Tyto fotony jsou po cestě od zdroje světla k oku odráženy, lámány, pohlcovány a opět vyzařovány. V~počítačové grafice je snahou důsledky těchto jevů reprodukovat. V této kapitole shrneme vybrané jevy a techniky zabývající se touto problematikou.
+
+\section{Osvětlení} \label{lighting}
+Samotné metody vizualizace bez modelu osvětlení předpokládají všudypřítomné zdroje světla v každém bodě scény. Krokem k fotorealismu je tedy zavedení světel -- situovaných zdrojů fotonů. Fotony cestují ze zdroje světla do pomyslného oka pozorovatele; po cestě interagují s objekty ve scéně. Základní druhy interakce světla s~objektem jsou odrazy od difuzního a zrcadlového (\textit{specular}) tělesa. Při zrcadlovém odrazu se paprsek odráží ve stejné rovině -- tento odraz bývá spojován s lesklými a zrcadlovými povrchy. Při difuzním odrazu se paprsek odráží náhodně všemi směry -- tento odraz bývá spojován s matnými povrchy a~nejvíce se podílí na vnímané barvě tělesa.
+
+Žára ve své knize \cite{ZaraJiri2004Mpg} dělí metody osvětlení na lokální a globální. Metody lokálního osvětlení jsou všeobecně výpočetně méně náročné, protože při výpočtech uvažují pouze zdroj světla, objekt a pozorovatele -- paprsek při své cestě od zdroje světla k pozorovateli změní směr maximálně jednou, kdy se odrazí od nějakého předmětu. Metody globálního osvětlení naopak pracují se scénou jako s celkem, paprsek se při své cestě může odrazit vícekrát od různých objektů.
+
+\subsection{Metody globálního osvětlení}
+Klasickým představitelem metod globálního osvětlení je \textit{ray tracing}. Metoda pro každý pixel obrazovky vysílá do scény paprsky a pro každý odraz paprsku od nějakého objektu počítá osvětlení objektu v daném bodě; počet odrazů je limitován. Metod sledujících trasy jednotlivých fotonů je více, liší se mj. výpočty při kolizi fotonu s tělesem nebo směrem sledování paprsků (od pozorovatele ke zdrojům světla nebo obráceně). Protože se současným hardwarem není výpočetně proveditelné v rozumném čase vypočítat výsledky analytickou metodou z rovnic popisujících chování světla, provádí se náhodné vzorkování metodami Monte Carlo. Kvalita výsledku poté závisí na počtu vzorků vypočtených těmito metodami (tedy počtu vržených paprsků) -- při nedostatečném počtu vzorků se výsledný obraz jeví jako zrnitý. I přes využití Monte Carlo metod ale výpočetní možnosti běžného uživatelského hardware nestačí k provádění výpočtů v reálném čase a tyto metody jsou tak využívány spíše jen pro \textit{renderování} videí a statických obrázků. To se dnes pomalu mění s vývojem grafických karet optimalizovaných pro tyto aplikace, jako jsou nové nVidia RTX\texttrademark \cite{2018NRTR}.
+
+Existují i další metody globálního osvětlení -- \textit{voxel cone tracing} \cite{CrassinCyril2011IIIU} například nepracuje s paprsky jako s přímkami, ale jako s kužely. Jako doplněk k \textit{ray tracingu}, který dostatečně dobře aproximuje chování lesklých povrchů, se používá \textit{metoda radiozity}, která je vhodná pro simulaci nepřímého difuzního osvětlení.
+
+\subsection{Metody lokálního osvětlení}
+Jak již bylo zmíněno, metody lokálního osvětlení při výpočtech uvažují pouze zdroje světla, objekt a pozorovatele. Nedochází k nepřímému osvětlení ze sousedních objektů ani odrazům. Mezi zdrojem světla a bodem na tělese se neuvažují žádné překážky, ani objekt samotný. Lokální modely jsou využity i jako základ globálního osvětlení.
+
+V roce 1977 navrhl Bui-Tuong Phong \cite{PhongBui1975Ifcg} empirický (tedy ne založený na fyzice) model pro výpočet lokálního osvětlení, který se stal standardem pro aplikace vykreslující v reálném čase. Model pracuje se třemi složkami osvětlení:
+\begin{itemize}
+	\item \textbf{Ambientní složka} není nijak ovlivněna polohou světel ani objektu vůči pozorovateli. Popisuje "všudypřítomné světlo okolí", je konstantní pro celou scénu a slouží k~tomu, aby neosvětlené části těles nebyly zcela černé (v reálném světě také běžně není absolutní tma).
+	\item \textbf{Difuzní složka} má zpravidla největší vliv na pozorovanou barvu objektu. Její intenzita závisí na úhlu osvětlené plochy vůči zdroji světla, ale ne na úhlu pozorovatele.
+	\item Intenzita \textbf{zrcadlové složky} závisí jak na úhlu zdroje světla a osvětlené plochy, tak na úhlu plochy vůči pozorovateli. Největší intenzity nabývá, pokud jsou světlo, osvětlený bod a pozorovatel v jedné rovině a úhel mezi plochou a světlem je stejný jako úhel mezi plochou a pozorovatelem.
+\end{itemize}
+
+Jednotlivé složky mohou mít u různých materiálů různý vliv, například spekulární složka je u matných materiálů potlačena. Výsledné osvětlení objektu je pak suma těchto tří složek pro všechna světla ve scéně. Tento výpočet se provádí pro každý vykreslovaný bod scény, případně při \textit{deferred shadingu} pro každý bod obrazovky.
+
+\subsection{Shadow mapping}
+Protože samotné metody lokálního osvětlení neobsahují mechaniky pro určení, zda je daný bod od daného světla zastíněn, je třeba tento problém řešit dodatečně. Obecně platí, že pokud je mezi bodem na tělese a zdrojem světla nějaký objekt (i třeba zkoumané těleso samotné), je bod zastíněn a světlo na tento bod nepůsobí. Neuvažujeme zde poloprůhledné objekty, které by problematiku dále zesložiťovaly. Jednou z metod, které problém stínů řeší, je \textit{shadow mapping} Lance Williamse \cite{WilliamsLance1978Ccso}. Ten pro každé světlo vykreslí scénu znovu; vždy "z pohledu" daného světla, přičemž důležitá je hloubková informace uchovávaná \mbox{v~Z-bufferu}. Při testování toho, zda je daný bod z pohledu pozorovatele zastíněn či nikoli, se poté uvažuje přímka mezi bodem a daným světlem: pokud vzdálenost mezi bodem a~zdrojem světla odpovídá hodnotě ze Z-bufferu světla, znamená to, že světlo na daný bod dopadá; pokud ne, je bod zastíněn.
+
+\section{Další grafické techniky}
+Ačkoli existují složitější vykreslovací/osvětlovací modely pokrývající širokou škálu optických jevů, pro svou složitost nebývají vhodné pro aplikace zobrazující v reálném čase. Proto bývají používány jednodušší modely, které tyto jevy nereplikují, a aproximace různých jevů pak implementovány dodatečně jako samostatné efekty.
+
+\subsection{\textit{Depth of field}} \label{dof}
+\textit{Depth of field} (DoF) je jev způsobený optikou lidského oka, případně kamery, které jsou schopné zaostřit pouze na jednu konkrétní hloubku; s rostoucí vzdáleností od této hloubky jsou objekty rozostřenější. Různé způsoby implementace DoF jsou popsány mj. v knize GPU Gems \cite{FernandoR2004Gg}. Jednou z technik je například \textit{Reverse-Mapped Z-Buffer Depth of Field}, která pracuje ve \textit{screen space} a která na každý pixel aplikuje rozostření v míře závisející na jeho vzdálenosti od hloubky ostrosti (tato informace se získá z \textit{depth bufferu}).
+
+\subsection{\textit{Screen Space Ambient Occlusion}}
+\textit{Ambient Occlusion} je jev globálního osvětlení, kde na místa těles v zúžených, konkávních oblastech dopadá méně \textit{ambientního} světla (protože je kolem nich hodně hmoty, která světlo zastiňuje). Jedná se typicky o rohy místností, dutiny apod. -- v důsledku tohoto jsou tyto oblasti ztmavené. Jedna z technik, která tento jev aproximuje při použití metod lokálního osvětlení, je \textit{Screen Space Ambient Occlusion} (SSAO). Ta pro každý pixel $p$ obrazovky vzorkuje několik okolních hodnot \textit{depth bufferu} a odvozuje, kolik těchto vzorků se nachází uvnitř polokoule danou bodem $p$ a jeho normálou. Každý vzorek, který se nachází uvnitř této polokoule, potom přispívá ke ztmavení pixelu $p$ (viz obrázek \ref{ssaoPrinciple}). Tato technika byla poprvé představena v CryEngine 2 \cite{Mittring:2007:FNG:1281500.1281671}.
+
+\begin{figure}[H]
+	\centering
+	\resizebox{0.5\linewidth}{!}{
+		\begin{tikzpicture}
+		\draw[thick,brown] (-60:1.5) -- ++(120:1.7823) -- +(60:1.5);
+		\draw[blue] (120:1) arc (120:-60:1);
+		\draw[->] (0,0) -- (30:0.7);
+		\draw[fill=gray] (-0.0355,0.8781) node[circle,fill=gray,draw=black,inner sep=1] (v3) {};
+		\draw (0.3865,0.4943) node[circle,draw=black,inner sep=1] {};
+		\draw (0.3203,-0.0865) node[circle,draw=black,inner sep=1] {};
+		\draw[fill=gray] (-0.2977,0.7086) node[circle,fill=gray,draw=black,inner sep=1] (v1) {};
+		\draw (0.7153,-0.3287) node[circle,draw=black,inner sep=1] {};
+		\draw (0,0) node[circle,fill=brown!30!black,draw=black,inner sep=1] (v2) {};
+		\draw (-0.2,-0.2) node {\small $p$};
+		
+		\draw[gray,thin,dotted,->] (v1) edge (v2);
+		\draw[gray,thin,dotted,->] (v3) edge (v2);
+		
+		\draw[fill=black] (3,0) node (v4) {} circle(0.1);
+		\draw [thin, dashed, gray] (v2) edge (v4);
+		\draw[fill=black] (3,0) -- +(-0.3,0.2) -- +(-0.3,-0.2);
+		\end{tikzpicture}
+	}
+	\caption{Princip \textit{screen space ambient occlusion}}
+	\label{ssaoPrinciple}
+\end{figure}\vspace{5mm}
+
+\subsection{\textit{God rays}}
+Krepuskulární paprsky, také nazývané \textit{sun rays} nebo \textit{god rays}, jsou jev způsobený světlem pronikajícím ne zcela průhledným vzduchem. Vzduch může světlo rozptylovat skrze prachové částice, částice neprůhledných plynů, aerosoly apod. V důsledku toho se sám vzduch, jímž světlo prochází, jeví, jako by mírně zářil. Je-li zdroj světla částečně zakryt, vzduch za překážkou je zastíněn. Střídaní osvětlených a~zastíněných částí vzduchu tak vyvolává dojem, že pozorovatel vidí dráhu paprsků světla.
+
+Grafický efekt replikující tento jev se nazývá \textit{volumetric light scattering}. Možné způsoby implementace se různí. Kenny Mitchell \cite{2008Gg3} popisuje metodu, která míru rozptýleného světla v každém pixelu obrazovky odvozuje tak, že vzorkuje \textit{depth buffer} v bodech mezi daným pixelem a zdrojem světla ve \textit{screen space}; míra rozptýlení pak závisí na tom, jaká část vzorků se nachází za zdrojem světla a jaké body zdroj zastiňují. Benjemin Glatzel ve své prezentaci na konference Digital Dragons 2014 \cite{KAJXNthgvW2QWSpF} popisuje metodu, která pro každý pixel vzorkuje body na paprsku vrženém do scény a testuje, zda se daný vzorek nachází ve stínu.
+
+\putImage[Fotografie s viditelnými krepuskulárními paprsky, autor Les Chatfield]{godRays_example.jpg}{height=6cm}
+
+\subsection{\textit{Order independent transparency}}
+Vykreslování průhledných primitiv vyžaduje řešení dodatečných problémů. Operace prolínání průhledných pixelů totiž není komutativní, tedy je pro korektní zobrazení nutné znát jejich pořadí z pohledu kamery. To tradičně vyžadovalo seřazení primitiv dle vzdálenosti od kamery a postupné vykreslování odzadu dopředu. Pro scény s velkým počtem primitiv však může nutnost jejich řazení přinášet velké zpomalení. Proto byly zkoumány techniky, které toto řazení nevyžadují -- tzv. \textit{order independent transparency} metody. Tyto techniky řeší řazení nikoli na úrovni primitiv, ale na úrovni vykreslovaných fragmentů. Přístupů je několik; lze zmínit například \textit{stochastickou průhlednost} \cite{EndertonE.2011ST}, kde jsou fragmenty vykreslovány s pravděpodobností odpovídající jejich průhlednosti. Při použití této metody vzniká šum, který je potlačován vícenásobným vykreslením průhledných primitiv a~průměrováním. Yang \cite{YangJasonC.2010RCLL} prezentuje metodu, která pro každý bod obrazovky generuje lineární seznam průhledných fragmentů, který je dále zpracován. Výhodou této metody je, že vyžaduje jediný průchod vykreslení průhledných objektů. McGuire \cite{McGuire2013Transparency} také přichází s přístupem, který vyžaduje jediný vykreslovací průchod; nekomutativní funkce pro prolínání je zde nahrazena komutativní aproximací.
+
+Dalším přístupem je tzv. \textit{depth peeling} \cite{Everitt01interactiveorder}, který zavádí několik vykreslovacích průchodů pro průhledné objekty; v každém průchodu je proveden dodatečný hloubkový test, který zahodí ty fragmenty, které jsou ve stejné hloubce nebo blíže ke kameře, než je fragment na stejných souřadnicích z předchozího průchodu. V důsledku toho s každým průchodem vznikne jedna průhledná vrstva; výsledný obraz pak vzniká kombinací těchto vrstev. Další publikace přinášejí různé optimalizace této techniky, např. \textit{dual depth peeling} \cite{Bavoil08orderindependent}.
+
+\chapter{Návrh} \label{ch:design}
+V této kapitole jsou popsány jednotlivé aspekty návrhu systému pro generování, reprezentaci a vizualizaci volumetrického terénu. Předmětem kapitoly je pouze obecná koncepce, implementační detaily jsou poté zdokumentovány v kapitole \ref{ch:impl}.
+
+\section{Reprezentace světa} \label{worldRepresentationDesign}
+Pro reprezentaci světa v paměti byla zvolena tato hierarchická struktura:
+\begin{itemize}
+	\item Svět je rozdělen do tzv. \textit{chunků}, které ho dělí do oblastí o 16×16×256 voxelech (v dokumentu budeme voxely označovat i jako \textit{bloky}). Chunky jsou organizovány hashovací tabulkou, kde klíč je pozice chunku ve světě.
+	\item V chunku jsou jednotlivé voxely uloženy v lineárním poli.
+\end{itemize}
+
+Hashovací tabulka umožňuje mít v paměti načtenou pouze oblast kolem hráče (svět je potenciálně nekonečný) a jednotlivé chunky mohou být načítány a odkládány podle toho, jak se hráč hýbe. Přístup k jakémukoli bloku ve světě je přitom velmi rychlý a~s~konstantní složitostí. Uvažujeme heterogenní voxelová data s~velikou rozmanitostí, kdy by stromové struktury měly oproti poli větší paměťové nároky a~vícenásobné indirekce by značně snižovaly propustnost paměti. Ukládání dat do pole navíc oproti jiným strukturám umožňuje data velice jednoduše kopírovat z a na GPU, čehož je v tomto projektu hojně využíváno. Stejně jednoduché je i ukládání a načítání z disku.
+
+Pro každý voxel se ukládá dvoubajtová hodnota určující typ voxelu (\textit{block ID}); pro účely této práce by stačila pouze jednobajtová hodnota, nicméně pokud by se projekt měl rozvíjet dál, tak ze zkušenosti s podobnými hrami je zřejmé, že 256 typů voxelu není dostatečné. Ačkoli tento mechanismus není v práci plně implementován ani demonstrován, pro ukládání dodatečných dat (např. růst květin, informace o otevření/zavření dveří, ...) se každému voxelu vyčleňují další dva bajty (\textit{small data}). Pokud by voxel potřeboval uchovávat více dat (např. pokud se jedná o truhlu obsahující inventář), v této dvoubajtové hodnotě bude uložen index do dynamicky alokovaného pole, ve kterém bude odkaz na strukturu s daty (\textit{large data}).
+
+\putImage[Struktura dat pro ukládání informací o voxelech]{chunkPole.pdf}{width=0.9\textwidth}
+
+Výška světa je omezena na jeden chunk: kvůli výpočtům denního osvětlení by stejně všechny chunky po vertikální ose ($z$) musely být načteny (výpočty popsány v oddíle \ref{lightingModel}); omezování dohledové vzdálenosti do výšky by také příliš nedávalo smysl a mohlo by být pro hráče zbytečně matoucí. Uspokojivých výsledků však lze dosáhnout s relativně malým výškovým maximem (oproti dohledové vzdálenosti v horizontálním směru) a prostředky potřebné pro větší výškový rozsah mohou být lépe využity pro zvýšení horizontální dohledové vzdálenosti. 
+
+Volba velikosti chunku je ovlivněna mnoha faktory:
+\begin{itemize}
+	\item Chunk by neměl být příliš malý, aby se nároky na jeho režii dostatečně rozdělily mezi voxely, které sdružuje.
+	\item Rozměry by měly být mocniny dvou kvůli různým optimalizacím.
+	\item Pro jednoduchost by šířka a délka chunku měly být stejné.
+	\item Výška chunku určuje výšku celého světa: je třeba dostatečný rozsah pro podzemí, oceán a hory.
+	\item Pro implementační jednoduchost by měly všechny jevy ovlivňovat okolí do vzdálenosti maximálně jednoho chunku (8-okolí). To například znamená, že světlo z nějakého světla by se mělo být schopno šířit nejdále do sousedních chunků v 8-okolí. Chunk by tedy měl být dostatečně velký, aby mohl být dostatečně velký i dosah světla.
+	\item Objem chunku by měl odpovídat nebo být menší vůči rozsahu hodnot, které lze uložit jako dodatečná data k voxelu. Takto bude zajištěno, že každý voxel v chunku může mít \textit{large data}.
+\end{itemize}
+
+Na základě těchto kritérií byla zvolena právě velikost 16×16×256. Výška 256 rozumně pokrývá nároky generátoru terénu; některé generované hory mají převýšení i přes 100 bloků, a menší výška (128) by tedy byla značným omezením (kromě hor je třeba dedikovat i jisté výškové vrstvy podzemí, mořské vodě a nadmořské výšce). Horizontální rozměry 16×16 jsou dostatečně malé na rozumné členění terénu a současně je maximální dosah světla 16 bloků dostatečný. Hodnoty 0--15 se dají reprezentovat čtyřmi bity, což se dobře zarovnává do bajtů. A objem chunku je $2^{16}$, což přesně odpovídá dvěma bajtům, do kterých se ukládají \textit{small data}, resp. adresy na \textit{big data}, voxelů.
+
+\section{Ukládání světa na disk}
+Jako datový formát určený pro ukládání světa na disk byla zvolena databáze SQLite. Jednotlivé chunky jsou reprezentovány řádky tabulky \verb|chunks|, ke kterým se přistupuje pomocí klíče definovaného souřadnicemi chunku. V dalším sloupci jsou pak v binárním formátu uloženy \textit{block IDs} ($1:1$ kopie z paměti komprimovaná pomocí zlib). \textit{Small data} ani \textit{large data} nejsou implementována.
+
+\putImage[Struktura dat pro ukládání světa na disk v databázi SQLite]{sqlite.pdf}{height=3cm}
+
+SQLite obstarává veškerou režii fragmentace místa na disku pro data jednotlivých chunků, celé řešení je tak velice jednoduché a univerzální, vše je uloženo v jednom souboru. Díky kompresi je uložený svět relativně malý (velikost souboru se zvětšuje s tím, jak hráč prochází světem a generují se další chunky).
+
+\section{Osvětlovací model} \label{lightingModel}
+Základ osvětlovacího modelu je shodný s tím ve hře Minecraft. Model má konstantní složitost v závislosti na počtu světel. Lze ho chápat jako metodu \textit{Light Propagation Volumes} se sférickou harmonickou funkcí prvního stupně \cite{MartinTimothyLy2012Holp}. Dá se také popsat celulárním automatem.
+
+Nad světem je zavedena krychlová mřížka o stejné velikosti, jakou má mřížka voxelová; uzly mřížky jsou situovány do středů voxelů. Pro každý uzel mřížky je definována hodnota úrovně světla; ta neobsahuje žádné směrové informace. Světlo je mřížkou šířeno tak, že s~každým krokem od zdroje jeho úroveň klesne o 1 (plus další útlum definovaný typem bloku). Zdroje světla jsou kombinovány nikoli aditivně, ale pomocí funkce $max$.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.3\textwidth}
+		\centering
+		\begin{tikzpicture}		
+			% axes
+			\draw[black,thick,->] (0, 0, 0) -- (3.5, 0, 0);
+			\draw[black,thick,->] (0, 0, 0) -- (0, 3.5, 0);
+			
+			\draw[fill=yellow, opacity=0.5] (0,0) -- (0,1) -- (1,1) -- (1,0) -- cycle;
+			\draw[fill=yellow, opacity=0.5] (0,2) -- (0,3) -- (1,3) -- (1,2) -- cycle;
+			
+			\draw (0.5, 0.5) circle(0.2) node {\footnotesize 15};
+			\draw (0.5, 2.5) circle(0.2) node {\footnotesize 15};
+		\end{tikzpicture}
+	\end{minipage}
+	\begin{minipage}[t]{0.3\textwidth}
+		\centering
+		\begin{tikzpicture}		
+			% axes
+			\draw[black,thick,->] (0, 0, 0) -- (3.5, 0, 0);
+			\draw[black,thick,->] (0, 0, 0) -- (0, 3.5, 0);
+			
+			\draw[fill=yellow, opacity=0.5] (0,0) -- (0,1) -- (1,1) -- (1,0) -- cycle;
+			\draw[fill=yellow, opacity=0.5] (0,2) -- (0,3) -- (1,3) -- (1,2) -- cycle;
+			
+			\draw (0.5, 0.5) circle(0.2) node {\footnotesize 15};
+			\draw (0.5, 2.5) circle(0.2) node {\footnotesize 15};
+			
+			\draw (1.5, 0.5) circle(0.2) node {\footnotesize 14};
+			\draw (0.5, 1.5) circle(0.2) node {\footnotesize 14};
+			\draw (1.5, 2.5) circle(0.2) node {\footnotesize 14};
+		\end{tikzpicture}
+	\end{minipage}
+	\begin{minipage}[t]{0.3\textwidth}
+		\centering
+		\begin{tikzpicture}		
+			% axes
+			\draw[black,thick,->] (0, 0, 0) -- (3.5, 0, 0);
+			\draw[black,thick,->] (0, 0, 0) -- (0, 3.5, 0);
+			
+			\draw[fill=yellow, opacity=0.5] (0,0) -- (0,1) -- (1,1) -- (1,0) -- cycle;
+			\draw[fill=yellow, opacity=0.5] (0,2) -- (0,3) -- (1,3) -- (1,2) -- cycle;
+			
+			\draw (0.5, 0.5) circle(0.2) node {\footnotesize 15};
+			\draw (0.5, 2.5) circle(0.2) node {\footnotesize 15};
+			
+			\draw (1.5, 0.5) circle(0.2) node {\footnotesize 14};
+			\draw (0.5, 1.5) circle(0.2) node {\footnotesize 14};
+			\draw (1.5, 2.5) circle(0.2) node {\footnotesize 14};
+			
+			\draw (1.5, 1.5) circle(0.2) node {\footnotesize 13};
+			\draw (2.5, 0.5) circle(0.2) node {\footnotesize 13};
+			\draw (2.5, 2.5) circle(0.2) node {\footnotesize 13};
+		\end{tikzpicture}
+	\end{minipage}
+	\caption{Demonstrace šíření světla dle modelu použitého v práci (ve 2D, jednotlivé diagramy odpovídají krokům výpočtu)}
+\end{figure}
+
+Světlo je složeno ze čtyř složek: červená, zelená, modrá a denní světlo. Hodnota každé složky je uložena ve 4 bitech, dohromady tedy každý uzel potřebuje 2 bajty. Barva denní složky světla se mění v závislosti na denní době; směrem dolů se v chunku složka pro denní světlo šíří bez úbytku intenzity.
+
+Výpočet osvětlení tedy probíhá takto: \nopagebreak
+\begin{enumerate}
+	\item Nastav hodnoty všech uzlů na nula; pokud je voxel odpovídající danému uzlu zdroj světla, nastav hodnotu uzlu dle jeho intenzity.
+	\item Jdi odshora dolů a v každém sloupci postupně nastavuj hodnotu složky denního světla. Nastavovaná hodnota začíná nahoře na maximální intenzitě a klesá na základě průhlednosti bloků ve sloupci.
+	\item Iteruj, dokud se hodnoty mění: uprav hodnotu v každém uzlu podle následujícího vzorce: $v_x \leftarrow \max(v_x, n_{0,x} - d, ..., n_{5,x} - d)$, kde $x \in \{R, G, B, D\}$ jsou jednotlivé složky světla, $n_{i, x}$ jsou intenzity světla sousedních uzlů (v 6-okolí) a $d = 1 + d_v$ je útlum světla ($d_v$ je útlum definovaný typem bloku na dané pozici, 0 = žádný útlum).
+\end{enumerate}
+
+Pro libovolnou pozici ve světě se hodnota osvětlení dá vypočítat lineární interpolací mezi osmi nejbližšími uzly mřížky. Při vykreslování stěn bloků vzorkujeme tuto mapu osvětlení s~posunem o půl bloku ve směru normály; bez toho bychom u neprůhledných bloků získávali příliš tmavé hodnoty, protože stěna je v polovině vzdálenosti mezi vnějším uzlem (který je osvětlen) a uzlem ve středu bloku (který není osvětlen) a interpolace by tedy navracela hodnotu zkreslenou tmou uprostřed bloku.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.45\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=2]
+		% axes
+		\draw[black,thick,->] (0, 0, 0) -- (2, 0, 0);
+		\draw[black,thick,->] (0, 0, 0) -- (0, 2, 0);
+		
+		\draw[fill=darkbrown] (0,0) -- (0,1) -- (1,1) -- (1,0) -- cycle;
+		
+		\draw[dashed] (0.5, 0.5) -- (1.5, 0.5);
+		
+		\draw[fill=black, text=white] (0.5, 0.5) circle(0.12) node {\tiny 0};
+		\draw[fill=yellow] (1.5, 0.5) circle(0.12) node {\tiny 15};
+		
+		\draw[fill=darkeryellow] (1, 0.5) circle(0.15) node {\tiny 7};
+		
+		\end{tikzpicture}
+	\end{minipage}
+	\begin{minipage}[t]{0.45\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=2]	
+		% axes
+		\draw[black,thick,->] (0, 0, 0) -- (2, 0, 0);
+		\draw[black,thick,->] (0, 0, 0) -- (0, 2, 0);
+		
+		\draw[fill=darkbrown] (0,0) -- (0,1) -- (1,1) -- (1,0) -- cycle;
+		
+		\draw[fill=black, text=white] (0.5, 0.5) circle(0.12) node {\tiny 0};
+		\draw[fill=yellow] (1.5, 0.5) circle(0.12) node {\tiny 15};
+		
+		\draw[thick,->] (1,0.5) -- (1.35,0.5);
+		\draw[fill=yellow] (1, 0.5) circle(0.15) node {\tiny 15};
+		
+		\end{tikzpicture}
+	\end{minipage}
+	\caption{Demonstrace posunu vzorkovaní osvětlení o půl bloku ve směru normály (ve 2D): bez posunu (vlevo) a s posunem (vpravo)}
+\end{figure}
+
+Důsledkem tohoto modelu je i přirozený \textit{ambient occlusion}, kdy dochází ke ztmavení ve vnitřních rozích:
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.45\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=2]	
+		
+		\draw[fill=darkbrown] (0,0) -- (0,1) -- (1,1) -- (1,0) -- cycle;
+		\draw[fill=darkbrown] (1,0) -- (1,1) -- (2,1) -- (2,0) -- cycle;
+		\draw[fill=darkbrown] (0,1) -- (0,2) -- (1,2) -- (1,1) -- cycle;
+		
+		\draw[fill=black, text=white] (0.5, 0.5) circle(0.12) node {\tiny 0};
+		\draw[fill=black, text=white] (1.5, 0.5) circle(0.12) node {\tiny 0};
+		\draw[fill=black, text=white] (0.5, 1.5) circle(0.12) node {\tiny 0};
+		
+		\draw[fill=yellow] (1.5, 1.5) circle(0.12) node {\tiny 15};
+		
+		\draw[thick,->] (1,1.5) -- (1.35,1.5);
+		\draw[fill=yellow] (1, 1.5) circle(0.15) node {\tiny 15};
+		
+		\draw[thick,-*] (1,1.25) -- (1.55,1.25);
+		\draw[fill=darkyellow] (1, 1.25) circle(0.15) node {\tiny 11};
+		
+		\draw[thick,-*] (1,1) -- (1.55,1);
+		\draw[fill=darkeryellow] (1, 1) circle(0.15) node {\tiny 7};
+		
+		% axes
+		\draw[black,thick,->] (0, 0, 0) -- (2.5, 0, 0);
+		\draw[black,thick,->] (0, 0, 0) -- (0, 2.5, 0);
+		\end{tikzpicture}
+	\end{minipage}
+	\begin{minipage}[t]{0.45\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=2]	
+		
+		\draw[fill=darkbrown] (0,0) -- (0,1) -- (1,1) -- (1,0) -- cycle;
+		\draw[fill=darkbrown] (1,0) -- (1,1) -- (2,1) -- (2,0) -- cycle;
+		\draw[fill=darkbrown] (0,1) -- (0,2) -- (1,2) -- (1,1) -- cycle;
+		
+		\draw[fill=black, text=white] (0.5, 0.5) circle(0.12) node {\tiny 0};
+		\draw[fill=black, text=white] (1.5, 0.5) circle(0.12) node {\tiny 0};
+		\draw[fill=black, text=white] (0.5, 1.5) circle(0.12) node {\tiny 0};
+
+		\draw[fill=yellow] (1, 2) circle(0.15) node {\tiny 15};
+		\draw[fill=yellow] (1, 1.5) circle(0.15) node {\tiny 15};
+		\draw[fill=darkyellow] (1, 1.25) circle(0.15) node {\tiny 11};
+		\draw[fill=darkeryellow] (1, 1) circle(0.15) node {\tiny 7};
+		
+		\draw[fill=yellow] (2, 1) circle(0.15) node {\tiny 15};
+		\draw[fill=yellow] (1.5,1) circle(0.15) node {\tiny 15};
+		\draw[fill=darkyellow] (1.25,1) circle(0.15) node {\tiny 11};
+		\draw[fill=darkeryellow] (1, 1) circle(0.15) node {\tiny 7};
+		
+		% axes
+		\draw[black,thick,->] (0, 0, 0) -- (2.5, 0, 0);
+		\draw[black,thick,->] (0, 0, 0) -- (0, 2.5, 0);
+		\end{tikzpicture}
+	\end{minipage}
+	\caption{Demonstrace přirozeného \textit{ambient occlusion} v modelu osvětlení (ve 2D)}
+\end{figure}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/lighting1.\imagesExtension}
+	\hfill
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/lighting2.\imagesExtension}
+	\caption{Model osvětlení se vzorkováním s posunutím normálou (vlevo) a bez posunutí normálou(vpravo)}
+\end{figure}
+
+Nevýhodou zvoleného osvětlovacího modelu je, že v určitých situacích produkuje artefakty, kde světlo "přetéká" skrze ostré hrany (hrany, které oddělují v 4-okolí [resp. 6-okolí ve 3D], ale ne v 8-okolí [resp. 26-okolí]):
+
+\begin{figure}[H]
+	\begin{minipage}[c]{0.49\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=2]
+		% axes
+		\draw[black,thick,->] (0, 0, 0) -- (2.5, 0, 0);
+		\draw[black,thick,->] (0, 0, 0) -- (0, 2.5, 0);
+		\draw[black,thick,->] (0, 0, 0) -- (0, 0, -2.5);
+		
+		\draw[fill=darkerbrown] (0,0,0) -- (1,0,0) -- (1,0,-1) -- (0,0,-1) -- cycle;
+		
+		% Back cube
+		\draw[fill=black, text=white] (0.5, 0.5, -1.5) circle(0.15) node {\tiny 0};		
+		\drawcube{0}{0}{-2}{brown, opacity=0.5}
+		
+		\draw (0.5,0.5,-0.5) -- (1.5,0.5,-1.5);
+		
+		\draw[fill=yellow] (1.5, 0.5, -1.5) circle(0.15) node {\tiny 15};
+		
+		\draw[dashed,->] (0.5, 1.5, -0.5) -- (0.5, 0.65, -0.5);
+		\draw[fill=black, text=white] (0.5, 1.5, -0.5) circle(0.15) node {\tiny 0};
+		
+		\draw[dashed,-*] (0.75, 1.5, -0.75) -- (0.75, 0.45, -0.75);
+		\draw[fill=darkeryellow] (0.75, 1.5, -0.75) circle(0.15) node {\tiny 2};
+		
+		\draw[dashed,-*] (1, 1.5, -1) -- (1, 0.45, -1);
+		\draw[fill=darkyellow] (1, 1.5, -1) circle(0.15) node {\tiny 3};
+		
+		% Right cube
+		\draw[fill=black, text=white] (1.5, 0.5, -0.5) circle(0.15) node {\tiny 0};
+		\drawcube{1}{0}{-1}{brown, opacity=0.5}
+		
+		\draw[fill=black, text=white] (0.5, 0.5, -0.5) circle(0.15) node {\tiny 0};
+		
+		\end{tikzpicture}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[c]{0.49\textwidth}
+		\includegraphics[width=\textwidth]{obrazky-figures/lightingArtefact.\imagesExtension}
+	\end{minipage}
+	\caption{Artefakt způsobený osvětlovacím modelem: světlo proniká skrze ostré rohy}
+\end{figure}
+
+Denní světlo je dále rozděleno na dvě složky -- ambientní a směrovou. Výsledná barva pixelu se vypočte jako
+\begin{equation} \label{lightingEq}
+	\vec{c} = \vec{c}_{albedo} * \left((\vec{l}_{rgb} + g) \cdot (1 - u \cdot l_{day}) + l_{day} \cdot \left(\vec{d}_{amb} + \max(0, \vec{n}_{face} \cdot \vec{n}_{sun}) \cdot \vec{d}_{dir}\right)\right) \text{,}
+\end{equation}
+kde $\vec{c}_{albedo}$ je barva pixelu před stínováním, $\vec{l}_{rgb}$ je vektor RGB složek osvětlení pro daný bod, $g$ je vlastní emise daného bodu (může být předávána v alfa kanálu textury), $u \in \langle 0,1 \rangle$ je útlum umělých světel, $l_{day}$ je denní složka osvětlení pro daný bod, $\vec{d}_{amb}$ je barva ambientní složky denního světla, $\vec{n}_{face}$ je normála objektu v daném bodě, $\vec{n}_{sun}$ je normála udávající směr denního světla a $\vec{d}_{dir}$ je barva směrové složky denního světla. Během dne je útlum umělých světel až $u = 0.8$, což má reflektovat to, že denní světlo je silnější než umělé zdroje osvětlení, a tedy se na denním světle tyto zdroje jeví slabší. Barva a směr denního světla se může měnit, aniž by se musela znovu počítat propagace světla.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.32\textwidth}
+		\includegraphics[width=\textwidth]{obrazky-figures/lighting3.\imagesExtension}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.32\textwidth}
+		\includegraphics[width=\textwidth]{obrazky-figures/lighting4.\imagesExtension}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.32\textwidth}
+		\includegraphics[width=\textwidth]{obrazky-figures/lighting5.\imagesExtension}
+	\end{minipage}
+	\caption{Demonstrace směrového efektu denního světla a útlumu umělého osvětlení}
+\end{figure}
+
+Současně s tímto modelem je zaveden i běžný \textit{shadow mapping}, ten je však počítán pouze pro sluneční světlo (a tedy ne pro světlo vydávané voxely).
+
+Návrh tohoto modelu je shodný s osvětlovacím modelem hry Minecraft v celulárním způsobu osvětlení, v maximálním dosahu světla a v prezenci denní složky. Detailnější informace o způsobu implementace osvětlení ve hře nejsou známy. Oproti Minecraftu je zavedeno RGB osvětlení, směrová složka denního světla a mechanismus vzorkování světelných dat s~posunutím normálou.
+
+\section{Generování terénu}
+Procedurální generování terénu využívá 2D a 3D Perlinova šumu a Voroného diagramů, jejichž principy jsou popsány v oddílu \ref{sect:procGenPrinciples}. Část výpočtů je prováděna ve 2D, tedy pro celý sloupec voxelů se stejnými $x, y$ souřadnicemi (výšku určuje souřadnice $z$). Nejprve se pro každý bod ve 2D určí hodnoty popisující vlastnosti terénu (jde o 2D Perlinův šum s vysokou velikostí oktáv);	tyto hodnoty mají sémantiku např. \textit{míra stromů}, \textit{míra pouště}, \textit{hornatost} apod. Budeme je zapisovat ve formátu $e_{stromy}$.
+
+Terén je generován na základě výškové mapy, která je dána vzorcem:
+\begin{equation}
+	z = \left\{ \begin{aligned}
+		z_{ocean} & \text{ pro $e_{ocean} > 0$} \\
+		z_{zaklad} + \min(z_{reky}, \max(z_{poust}, z_{kopce}, z_{hory}, z_{plane})) & \text{ pro $e_{ocean} <= 0$}
+	\end{aligned}
+	\right.
+\end{equation}
+
+$z_{zaklad}$ zastupuje základní nadmořskou výšku terénu, ke které se přičítají další prvky krajiny, a je vypočtena Perlinovým šumem s relativně velkou velikostí oktávy. $z_{plane}$ popisující pláně a $z_{kopce}$ popisující kopce jsou také pouze Perlinovy šumy. Ostatní parametry budou (neformálně) popsány v následujících oddílech. Většina těchto hodnot je upravena (vynásobením s hodnotou odvozenou od $e_{ocean}$) tak, aby se u pobřeží blížila k nule. Typ bloku na úrovni země je určen na základě $e_{XX}$ koeficientů a na základě gradientu výškové mapy.
+
+\subsection{Hory}
+Hory jsou generovány kompozicí dvou 2D Voroného diagramů a jednoho 2D Perlinova šumu. Princip generování hornatého terénu byl demonstrován na obrázku \ref{mountainsVoronoi} v sekci \ref{voronoiDiagrams}: výška terénu stoupá se vzdáleností od nejbližšího generovaného bodu, což vytváří ostré hrany připomínající horský masiv. Tento princip je při generování hor uplatněn dvakrát: jednou ve větším měřítku na samotné vrcholy a hřebeny, podruhé v menším měřítku na sekundární vrásnění. K těmto dvěma komponentám je ještě přičten Perlinův šum pro nepravidelné nerovnosti.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=\textwidth]{obrazky-figures/mountains1.\imagesExtension}
+	\\ \vspace{1cm}
+	\includegraphics[width=\textwidth]{obrazky-figures/mountains2.\imagesExtension}
+	\\ \vspace{1cm}
+	\includegraphics[width=\textwidth]{obrazky-figures/mountains3.\imagesExtension}
+	\caption{Tři komponenty při generování hor: Voroného diagram pro hřebeny, Voroného diagram pro sekundární vrásnění a Perlinův šum pro nerovnosti (postupně aplikováno odshora)}
+\end{figure}
+
+\subsection{Pouště}
+\begin{figure}[H]
+	\includegraphics[width=\textwidth]{obrazky-figures/desert.\imagesExtension}
+	\caption{Poušť}
+\end{figure}
+
+Poušť taktéž využívá kombinaci Perlinova šumu a Voroného diagramů; v tomto případě zde Voroného diagramy modelují duny. Je zde počítáno maximum ze dvou Voroného diagramů (o stejné velikosti oktávy), aby se omezila zřetelnost vzoru, který při využití Voroného diagramů vzniká.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.49\textwidth}
+		\includegraphics[width=\textwidth]{obrazky-figures/desertVoronoi2.\imagesExtension}
+	\end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.49\textwidth}
+		\includegraphics[width=\textwidth]{obrazky-figures/desertVoronoi1.\imagesExtension}
+	\end{minipage}
+	\caption{Duny generované jedním (vlevo) a dvěma (vpravo) Voroného diagramy (zmenšené měřítko)}
+\end{figure}
+
+\pagebreak
+\subsection{Řeky}
+Řeky jsou generovány pomocí Perlinova šumu. Absolutní hodnota Perlinova šumu generuje vzor s ostrými minimy v nule. Řeky jsou generovány právě v místě těchto minim.
+
+\begin{figure}[H]
+	\includegraphics[width=\textwidth]{obrazky-figures/rivers3.\imagesExtension}
+	\caption{Vizualizace absolutní hodnoty Perlinova šumu. Řeky jsou generovány prahováním této hodnoty.}
+\end{figure}
+
+\vfill
+
+Všechny řeky jsou generovány na úrovni mořské hladiny. Výška okolní krajiny je v okolí řek postupně snižována (na základě výstupu šumu, pomocí kterého byly řeky generovány).
+
+\begin{figure}[H]
+	\includegraphics[width=\textwidth]{obrazky-figures/rivers1.\imagesExtension}
+	\caption{Snižování nadmořské výšky krajiny okolo řek, aby jejich hladina mohla být na úrovni moře}
+\end{figure}
+
+\subsection{Stromy}
+Stromy jsou z pohledu matematického popisu relativně jednoduché. Každému stromu je náhodně určena výška v určitém intervalu. Velikost koruny je pak odvozena od velikosti výšky, listy jsou generovány s pravděpodobností snižující se se vzdáleností od kmene (\textit{manhattan distance}). Rozmístění stromů je dáno rozmístěním bodů ve Voroného diagramu; terén je rozdělen do mřížky, v každé oblasti mřížky je 1 až N bodů.
+
+\begin{figure}[H]
+	\includegraphics[width=\textwidth]{obrazky-figures/forest.\imagesExtension}
+	\caption{Les}
+\end{figure}
+
+\subsection{Jeskyně}
+Při generování jeskyní se používají dva 3D Perlinovy šumy; jeden definuje oblasti, kde se jeskyně vyskytují (větší oktávy), druhý dává podobu samotným jeskyním (menší oktávy). Oba šumy jsou prahovány a vzájemně v konjunkci (jeskynní prostor je vytvořen, pokud jsou hodnoty obou šumů pro daný voxel nad určitým prahem). Aby vstupy do jeskyní nebyly příliš časté a rozsáhlé, jsou jeskyně těsně pod povrchem v některých místech potlačovány pomocí 2D Perlinova šumu.
+
+\begin{figure}[H]
+	\includegraphics[width=\textwidth]{obrazky-figures/caves1.\imagesExtension}
+	\caption{Generovaný jeskynní komplex}
+\end{figure}
+
+\vfill
+
+\begin{figure}[H]
+	\includegraphics[width=\textwidth]{obrazky-figures/caves2.\imagesExtension}
+	\caption{Pohled uvnitř jeskyně}
+\end{figure}
+
+\begin{comment}
+\begin{figure}[H]
+	\includegraphics[width=\textwidth]{obrazky-figures/caves3.\imagesExtension}
+	\caption{Vstup do jeskyní}
+\end{figure}
+\end{comment}
+
+\chapter{Implementace} \label{ch:impl}
+Jako součást této práce byla vytvořena aplikace implementující metody zmíněné v tomto dokumentu. Zdrojový kód aplikace je v jazyce D. Jako grafické API pro práci s GPU bylo zvoleno OpenGL ve verzi 4.6 (knihovna \texttt{bindbc-opengl}). Z této verze bylo využito anizotropní filtrování (\inlineDCode{ARB_texture_filter_anisotropic}) a \verb|gl_DrawID| ve vertex shaderu (\inlineDCode{ARB_shader_draw_parameters}). Z modernějších použitých technologií lze zmínit také například \textit{compute shaders} (GL 4.3), \textit{bindless} textury (není \textit{core feature}) nebo \textit{direct state access} (GL~4.5).
+
+Pro načítání obrázků, správu okna a uživatelských vstupů a vykreslování textu byla použita knihovna \texttt{derelict-sfml2}. Jako rozhraní pro SQLite (který byl zvolen jako formát pro ukládání terénu na disk) byla zvolena knihovna \texttt{d2sqlite3}. Grafika pro projekt byla přejata z "C-tetra texture pack"\footnote{\url{https://www.planetminecraft.com/texture_pack/16x-c-tetra-1-13/}}, který je publikován pod licencí CC BY-NC 4.0\footnote{\url{https://creativecommons.org/licenses/by-nc/4.0/}} (volně použitelné pro nekomerční projekty, nutné zmínit autora).
+
+\section{Reprezentace světa}
+Třídy vztahující se k reprezentaci světa jsou znázorněny na následujícím diagramu:
+\putImage[Diagram popisující vztahy mezi třídami souvisejícími s reprezentací světa]{worldClasses.pdf}{height=6cm}
+
+Třída \texttt{Block} reprezentuje různé typy voxelu. Její metody definují veškeré vlastnosti voxelu -- jeho vzhled, průhlednost, světelnou emisi, jeho kolizní model apod. Nový typ voxelu lze vytvořit definováním nové třídy dědící třídu \texttt{Block}, alternativně jej lze sestavit z různých komponent (komponenty definující vzhled, komponenty definující kolize, ...) s~využitím tříd \texttt{ComponentBlock} a \texttt{BlockComponent\_XXX}. Třída \texttt{Content} potom uchovává databázi všech registrovaných bloků.
+
+Třída \texttt{Game} reprezentuje \textit{hru}. Návrh počítá s možností mít více světů v jedné hře, implementace ale podporuje pouze jeden. Třída \texttt{Game} spravuje databázový soubor ke hře přiřazený a uchovává mapování dvoubajtového \textit{block ID} (viz sekce \ref{worldRepresentationDesign}) na instance třídy \texttt{Block}.
+
+Třída \texttt{World} pak reprezentuje jeden svět. To zahrnuje mj. načítání a odkládání jednotlivých chunků do/z paměti a přístup k nim.
+
+Třída \texttt{Chunk} reprezentuje jeden chunk (termín \textit{chunk} je popsán v sekci \ref{worldRepresentationDesign}). Obsahuje pole ID bloků, které chunk tvoří.
+
+Třída \texttt{BlockContext} slouží k reprezentaci libovolného voxelu ve světě. Používá se jako "ukazatel" na daný blok; obsahuje informace o tom, v jakém světě a na jaké pozici se voxel nachází, referenci na \texttt{Block} dle typu voxelu apod. Tato třída je předávána jako parametr u~metod ve třídě \texttt{Block}, například metoda volaná pro vykreslení bloku je
+\begin{dcode}
+	void b_staticRender(BlockContext ctx, BlockRenderer rr);
+\end{dcode}\vspace{0mm}
+Příkladem uvedeme kód pro vytvoření bloku (kamene) na pozici $(0,10,0)$:
+\begin{dcode}
+	scope BlockContext ctx = new BlockContext(world, WorldVec(0,10,0));
+	content.block.stone.b_construct(ctx);
+\end{dcode}
+Pro reprezentaci pozice bloku ve světě je použita struktura \inlineDCode{WorldVec}, což je 3D vektor s~komponentou typu \inlineDCode{int} (čtyři bajty na jakékoli platformě).
+
+\section{Generování a ukládání světa}
+Subsystém generování a ukládání světa je založen na těchto třídách:
+\putImage[Diagram popisující vztahy mezi třídami, které souvisí s generováním a ukládáním světa]{worldGenClasses.pdf}{width=\textwidth}
+
+Třída \inlineDCode{World} spravuje pouze chunky, které jsou načtené v paměti. Jakmile nějaký požadovaný chunk v paměti není, je předán třídě \inlineDCode{WorldLoader} požadavek na jeho načtení. Třída \inlineDCode{WorldLoader} běží na dedikovaném vlákně a žádaný chunk, pokud již byl generován, načte z SQLite databáze, v opačném případě zajistí jeho vygenerování. Chunky, které již není žádoucí uchovávat v paměti, jsou taktéž předány této třídě a ta zajistí jejich uložení do databáze.
+
+Systém je navržen tak, že na chunky, které mají být načtené v paměti, je třeba se periodicky dotazovat. \textit{Chunky}, na které nebyl během pěti sekund žádný dotaz, jsou předány k odložení. Pro tento mechanismus se využívají funkce \inlineDCode{World.maybeChunkAt(WorldVec pos)}, \inlineDCode{World.maybeLoadChunkAt(WorldVec pos)} a \inlineDCode{World.chunkAt(WorldVec pos)}. První zmíněná funkce navrátí chunk na zadané pozici pouze v případě, že je načtený v paměti (jinak navrátí \inlineDCode{null}). Druhá funkce se chová stejně jako první, ale nenačtený chunk zadá k načtení (které neproběhne hned, ale někdy v budoucnu) a u načteného chunku vynuluje časovač odložení. Funkce \inlineDCode{chunkAt} počká, dokud se chunk nenačte do paměti, a nikdy nenavrací \inlineDCode{null}. \textit{Chunky}, které jsou načtené v paměti, nazýváme \textit{aktivní}.
+
+Požadavky na vygenerování nového chunku jsou předány třídě \inlineDCode{WorldGen}. Ta je určena pro \textit{subclassing}, kde jednotlivé podtřídy mají definovat různé generátory terénu. V~této práci je definována pouze třída \inlineDCode{WorldGen_Overworld}, která generuje svět připomínající Zemi. Systém generování je navržen tak, aby mohl stejný generátor běžet na různých platformách. V této práci bylo implementováno pouze generování akcelerované na GPU (\texttt{WorldGen\-PlatformGPU} a \inlineDCode{WorldGenCodeBuilderGPU}). Tento návrh byl proveden s ohledem na to, aby do budoucna mohl být vytvořen \textit{multiplayer} a aby mohl existovat dedikovaný server běžící na hardware, který nemusí podporovat GPU akceleraci.
+
+Generování světa je realizováno více 2D i 3D průchody, které mohou být kombinovány v libovolném pořadí. Průchody mají funkcionální charakter -- průchod se počítá pro každý pixel (pro 3D průchody voxel) nezávisle, v rámci průchodu lze číst data z předchozích průchodů, výsledky jsou pak dostupné v následujících průchodech. Jednotlivé průchody zastupuje třída \inlineDCode{WorldGenCodeBuilder}, která současně poskytuje rozhraní pro definici jejich chování. Ačkoli tedy generování běží na GPU v \textit{compute shaderech}, jeho programování probíhá pomocí kódu v jazyce D. Nevýhodou tohoto přístupu je, že jelikož jazyk D nepodporuje přetěžování některých operátorů s dostatečnou možností přizpůsobení (konkrétně operátory porovnávání, přiřazení nebo logické \inlineDCode{&&} a \inlineDCode{||}), je komfort při psaní kódu o něco nižší, než kdyby se pracovalo přímo s compute shadery. Výhodou tohoto přístupu je jeho nezávislost na cílové platformě a také to, že struktury pro předávání dat mezi jednotlivými průchody mohou být automaticky generovány a integrace průchodů je tedy velmi jednoduchá.
+
+\begin{codeFloat}[H]
+	\begin{dcode}
+with (platform.add2DPass()) {
+	auto seaLevel = c(seaLevelVal);
+	auto mountainess = clamp01(perlin2D(256, [c(0.25), c(0.5), c(1)]).x + 0.2);
+	auto elevationZ = 64 * clamp01(0.2 + perlin2D(baseOctave, coefs).x);
+
+	// Big mountain peaks
+	auto bigPeakVoronoi = voronoi2D(1024, 8);
+	auto bigPeakVal = pow((bigPeakVoronoi.x - 0.05) * 5, c(2)) * mountainess;
+	
+	// Small mountain peaks
+	auto smallPeakVal = pow(voronoi2D(64, 4).x * 3, c(4));
+	
+	// Lil' perlin to smooth things out
+	auto smoothPerlin = perlin2D(16, [c(0.3), c(0.2), c(0.1), c(0.1)]).x;
+	
+	auto mountainsZ = max(c(0), bigPeakVal * 128 + smallPeakVal * 32 + smoothPerlin * 32 - 16) * mountainess;
+
+	set2DData("groundZ", seaLevel + elevationZ + mountainsZ);
+	finish();
+}
+	\end{dcode}
+	\caption{Příklad programování generátoru světa; jedná se o výňatek z prvního průchodu (2D) generátoru \inlineDCode{WorldGen_Overworld}}
+\end{codeFloat}
+
+Funkce pro Perlinův šum a Voroného diagramy na GPU využívají vláknové kooperace. Detailnější specifikace algoritmů však rozsahově nezapadá do této práce.
+
+Generátor \inlineDCode{WorldGen_Overworld} pracuje s pěti průchody (2×2D a 3×2D). Jejich funkce je popsána v následujícím diagramu.
+\putImage[Diagram průchodů generátoru \inlineDCode{WorldGen_Overworld}]{worldgenOverworld.pdf}{width=\textwidth}
+
+Vegetace je generována v odděleném 3D průchodu, protože je třeba zajistit, aby se negenerovala nad vstupy do jeskyní, kde terén neodpovídá výškové mapě. Proto má první 3D průchod 2D výstup, který udává, zda je na dané $x,y$ pozici vstup do jeskyně a tedy se v daném místě nemá generovat vegetace. 3D průchody mohou mít 2D výstup, ale v~celém sloupci do něj smí zapsat pouze jediná invokace; v opačném případě není výsledek definován. V případě jeskyní zapisuje do 2D výstupu invokace odpovídající voxelu na úrovni výškové mapy.
+
+Při generování každého chunku je interně generována oblast 3×3 chunků s výstupním chunkem uprostřed: tato redundance je třeba například pro situace, kdy se mají generovat listy ke stromu, jehož kmen je ve vedlejším chunku, a kde je třeba vědět, zda generování stromu není potlačeno kvůli vstupu do jeskyně. Při generování opět vyvstává omezení lokality dané volbou velikosti chunku, jak bylo zmíněno v oddíle \ref{worldRepresentationDesign}.
+
+\section{Vykreslování světa}
+S vykreslováním světa souvisí tyto třídy:
+\putImage[Diagram tříd souvisejících s vykreslováním světa]{worldRendering.pdf}{width=\textwidth}
+
+\subsection{\textit{Block faces}}
+Stěny voxelů jsou vykreslovány standardní vykreslovací \textit{pipeline} jako trojúhelníky. Voxely v aplikaci nemusí mít vzhled krychle, mohou mít libovolný tvar.
+\putImage[Různé tvary voxelů]{blockShapes.\imagesExtension}{width=0.9\textwidth}
+
+Veškeré vykreslování je nicméně založeno na otexturovaných obdélnících (dále v tomto textu nazývané \textit{block faces}). Různé varianty těchto \textit{block faces} reprezentují instance třídy \inlineDCode{BlockFace}. Ta definuje nejen texturu, ale i další vlastnosti týkající se vykreslování:
+\begin{itemize}
+	\item Práce s \textit{alpha} kanálem:
+	\begin{itemize}
+		\item Kanál může udávat průhlednost, která se prahuje (\textit{alpha testing}). Tato metoda je rychlá na vykreslování, ale zamezuje použití \textit{mipmappingu}. V aplikaci je použita pro vykreslování květin a listů stromů.
+		\item Kanál může udávat průhlednost (\textit{alpha blending}). V tom případě je \textit{face} vykreslován pomalejšími mechanismy podporující průhlednost (\textit{depth peeling}).
+		\item Kanál může udávat míru vlastní emise daného pixelu (\textit{glow map}).
+	\end{itemize}
+	\item \textit{Cull facing}: některé \textit{faces} (například vegetace) se vykreslují z obou stran, stěny neprůhledných krychlí stačí vykreslovat pouze směrem ven.
+	\item \textit{Wrapping} udávající, zda má být k textuře přistupováno jako k opakujícímu se vzorku (tato volba se projevuje na vyšších úrovních \textit{mipmap}).
+	\item Animace vrcholů. \textit{Face} může "povlávat" ve větru, buď ve všech osmi rozích (listy stromů), nebo pouze ve vrchní části (květiny). Dále je zde možné zvolit animaci pro hladinu kapalin. Tento jev je implementován na úrovni \textit{vertex shaderu}.
+	\item Rozlišení textury.
+\end{itemize}
+
+\textit{Faces} se stejnou konfigurací jsou agregovány do celku reprezentovaného třídou \\\inlineDCode{BlockFaceRenderingContext} (dále označován jako \textit{face context}). Ten uchovává informace o~konfiguraci (která je jednotná pro všechny \textit{faces} jím spravované) a \textit{shadery} použité při vykreslování. Všechny \textit{shadery} jsou sestaveny z kódu uloženého v souborech \\\inlineDCode{res/shader/render/blockRender.(vs|fs).glsl}, jejich chování se upravuje vložením různých \verb|#define| direktiv. Každý \textit{face context} obsahuje více variant \textit{shaderu}: pro standardní vykreslování, pro vykreslování do \textit{shadow mapy} a pro vykreslování pro \textit{depth peeling} (kde je navíc implementován \textit{near depth test}).
+
+Jednotlivé \textit{faces} jsou uloženy v atlasu textur (třída \inlineDCode{BlockFaceAtlas}); každému \textit{face kontextu} náleží vlastní atlas. V textuře, kterou atlas spravuje, jsou \textit{faces uloženy} v poli (\inlineDCode{GL_TEXTURE_2D_ARRAY}).
+
+\subsection{Reprezentace dat pro vykreslování}
+Každý chunk je vertikálně rozdělen do několika regionů; ty jsou reprezentovány třídou \\\inlineDCode{ChunkRenderRegion}. Tyto regiony jsou pak nejmenší jednotkou vykreslování (region se vykresluje celý, nebo vůbec). Pro každý \textit{face context} region uchovává vlastní sadu \textit{bufferů} obsahující data pro vykreslování. Tato data jsou aktualizována pouze v případě, kdy je to potřeba -- při prvním zobrazení chunku nebo pokud hráč provede zásah do terénu.
+
+Data jsou na GPU uložena v jednom velkém bufferu, který spravuje třída \inlineDCode{GLBufferAtlas}. Je implementován vlastní systém pro správu paměti; ten neumožňuje realokaci (ta ani není potřeba, data jsou nejprve sestavena na CPU a až potom jsou nahrána na GPU) a alokace zabírá vždy nejmenší volný region paměti, který je současně dostatečně veliký.
+
+Pro každý vrchol se uchovávají tři atributy: pozice, UV texturovací souřadnice a normála. Protože normála je pro všechny tři vrcholy trojúhelníku stejná, je zavedena optimalizace, díky které lze normálu uchovávat pouze jednou pro celý trojúhelník: buffer s normálou je připojen třikrát, jednou jako atribut $N_x$, podruhé jako $N_y$ a potřetí jako $N_z$. Střída je pro všechny tři připojení nula, tedy údaje ve všech třech atributech postupně prochází $x$, $y$ i $z$ komponenty normály. \textit{Offset} je pro každé napojení upraven tak, aby vždy třetí vrchol trojúhelníku (resp. \textit{provoking vertex}, který je implicitně nastaven na \inlineDCode{GL_LAST_VERTEX_CONVENTION}) obsahoval správná data pro všechny tři komponenty. Atributy komponent normály jsou označeny jako \inlineDCode{flat}, \textit{fragment shader} tedy pro všechny tři vrcholy dostává data z \textit{provoking} vrcholu. Nevýhodou tohoto přístupu je, že platná data normál jsou ve \textit{vertex shaderu} dostupná pouze v jednom vrcholu trojúhelníku, a proto ve \textit{vertex shaderu} nelze dělat \textit{per-vertex} operace s normálami (např. posun normál při animacích bloků, které jsou realizovány ve \textit{vertex shaderu}).
+
+\putImage[Struktura \textit{vertex arrays} předávaných \textit{vertex shaderu}]{buffersData.pdf}{width=0.9\textwidth}
+
+Aplikace uchovává data o velkém množství vrcholů (řádově až desítky milionů vrcholů při maximální dohledové vzdálenosti -- v testované scéně bylo při dohledové vzdálenosti 32 chunků naměřeno 24 milionů vrcholů), proto je žádoucí maximální optimalizace paměti. Normály jsou proto ukládány jako vektor osmibitových celých čísel. Protože jsou \textit{block faces} uloženy v poli textur, $x$ a $y$ souřadnice budou vždy buď 0, nebo 1, a lze je obě uložit do jednoho bajtu. Souřadnice $z$ udávající číslo vrstvy je pro všechny vrcholy \textit{face} stejná, takže je uložena stejným způsobem, jako data normály (jeden bajt na každý vrchol, data se poté spojí pro zvýšení rozsahu hodnot a předají se \textit{fragment shaderu} jako \textit{flat} parametr).
+
+Komponenty souřadnic vrcholů jsou taktéž uloženy v jednom bajtu; pozice regionu ve světe je předávána dodatečně jako konstanta pro celý \textit{buffer}. Díky tomu musí být chunk vertikálně rozdělen na alespoň dva regiony, protože by jinak nešlo reprezentovat pozice horních vrcholů voxelů nejvýše v chunku ($z = 255$ by reprezentovalo spodní hrany nejsvrchnější vrstvy, pro vrchní vrcholy by již došlo k přetečení).
+
+Protože ne všechny typy bloků mají vykreslované \textit{faces} zarovnané do voxelové mřížky (např. kaktus a obilí; květiny mají sice mají atypický tvar, ale souřadnice jsou zarovnané do mřížky, trojúhelníky jdou křížem přes voxel, jak je demonstrováno na obrázku \ref{blockShapesDiagram}), byly zavedeny dvě sady bufferů: v jedné sadě jsou souřadnice ukládány v 3× 1B, ve druhé sadě jsou souřadnice uloženy ve 3× 32 bitech s plovoucí čárkou (\textit{float}). Výskyt těchto bloků ve scéně je značně nižší, takže kapacita této sady bufferů může být mnohem menší.
+
+\putImage[Bloky kaktus a obilí, jejichž \textit{faces} nejsou zarovnané do voxelové mřížky]{unalignedBlocks.\imagesExtension}{width=0.9\textwidth}
+
+Paměťové nároky na jeden vrchol jsou tedy 3×1 + 2×1 + 1 = 6 bajtů při 8b souřadnicích a 3×4 + 2×1 + 1 = 15 bajtů při 32b souřadnicích. Při testované scéně, která obsahuje 24 milionu 6B vrcholů a 100 tisíc 15B vrcholů, činí paměťové nároky na VRAM 145 MB. Pokud by všechny vrcholy byly ukládány ve 32 bitech, zvýšily by se nároky na 360 MB. Nejedná se o pro moderní GPU nijak dramatická čísla, nicméně buffery nejsou jediné paměťově náročné zdroje, které aplikace využívá. Menší velikost složek navíc snižuje nároky na datovou propustnost, která bývá nejběžnějším úzkým hrdlem při práci s GPU.
+
+\subsection{Sestavování dat pro vykreslování} \label{buildDrawData}
+Základem vykreslování je projít všechny bloky v regionu a nad každým blokem zavolat funkci \inlineDCode{b_staticRender(context, renderer)}, která zajistí vložení dat reprezentujících příslušné \textit{faces} do příslušných \textit{bufferů}. Tento přístup je dále optimalizován:
+
+\begin{enumerate}
+	\item Sousedící stěny krychlových bloků, které jsou těsně vedle sebe, nelze vidět, tedy se ani nemusí vykreslovat. Vynechání těchto stěn přináší extrémní zrychlení, protože namísto všech bloků lze vykreslovat pouze tenkou "skořápku" povrchu terénu. Počet vykreslovaných primitiv takto klesne o několik řádů.
+	\putImage[Pohled "zevnitř" terénu; aplikace vykresluje pouze stěny, které jsou viditelné z volného prostoru]{neighbourFacesOptimization.\imagesExtension}{width=0.9\textwidth}
+	
+	\item Sousedící stěny stejného typu, které jsou v jedné rovině, lze agregovat do jednoho vykreslovacího primitiva.
+	
+	\item Iterování přes všechny bloky v chunku a volání funkce \inlineDCode{b_staticRender} pro každý z nich je pomalé. Pokud víme, že voxel je ze všech stran obklopen neprůhlednými krychlemi (nebo pokud jsou všechny jeho viditelné stěny agregovány, takže jejich vykreslení zajišťuje jiný blok), můžeme ho zcela přeskočit.
+\end{enumerate}
+
+Při vykreslování chunku je třeba mít v paměti načteny také jeho sousední chunky (aby šly počítat optimalizace sousedících stěn i pro bloky na okraji chunku, dále také kvůli výpočtům osvětlení), proto se klasifikace chunků dále rozvádí na \textit{neaktivní} (nenačtené v~paměti), \textit{aktivní} (načtené v~paměti, ale nevykreslované) a \textit{viditelné}. Aby mohly proběhnout výpočty pro vykreslování, musí být chunk \textit{viditelný} a jeho sousedi v 8-okolí musí být \textit{aktivní}. Viditelnost chunku musí být periodicky žádána, podobně jako musí být žádána aktivnost. Všechny chunky v určité vzdálenosti od hráče (\textit{manhattan distance}, dle aktuálního nastavení dohledové vzdálenosti) jsou v každém snímku obnovovány jako \textit{viditelné}.
+
+Všechny výše zmíněné optimalizace jsou akcelerovány na GPU. Z toho důvodu je v~GPU uchovávána textura 3D textura s \textit{block IDs} (jedná se o $1:1$ kopii dat z CPU) a buffer s~informacemi o vlastnostech jednotlivých typů bloků. Data \textit{block IDs} jsou agregována do 3D textur o velikosti 32×32×256 bloků (tedy 2×2 chunků). Tyto oblasti jsou v CPU reprezentovány třídou \inlineDCode{ActiveArea} a jsou centrálně spravovány třídou \inlineDCode{WorldResources}.
+
+\textit{Block IDs} na GPU jsou uchovávány pro všechny \textit{aktivní chunky}. Ke každému typu bloku je na GPU uloženo, které z jeho šesti stran jsou zcela zakryté neprůhlednou stěnou. Při sestavování dat pro vykreslování je pak spuštěn \textit{compute shader}, kde je na základě těchto informací v jednom paralelním kroku vypočteno, které stěny každého bloku v chunku jsou viditelné, a které ne (viditelné jsou ty stěny, jejichž odpovídající sousedi nemají na stejnou stranu neprůhlednou stěnu). Do výstupního \textit{storage bufferu} je pak pomocí atomického čítače serializován seznam souřadnic těch voxelů, které nejsou prázdné a které mají alespoň jednu stěnu viditelnou. Data tohoto \textit{bufferu} jsou předána CPU, který pak navrácené bloky projde a zavolá pro ně \inlineDCode{b_staticRender}. Jedním z parametrů této funkce je třída \inlineDCode{BlockRenderer}, která poskytuje metody typu \inlineDCode{drawFace} a \inlineDCode{drawBlock} zajišťující sestavení korektních dat pro vykreslování.
+
+Stejný \textit{compute shader} zajišťuje i agregaci sousedících stěn. Pro každou stěnu každého voxelu je určena velikost obdélníku, ve kterém jsou všechny stěny viditelné a stejného typu. Tato data jsou pak předána CPU, na kterém třída \inlineDCode{BlockRednerer} zajistí konstrukci primitiva správných rozměrů. Informace je předána pouze bloku v jednom z okrajů obdélníku; ostatním blokům je předán rozměr 0×0, který \inlineDCode{BlockRednerer} informuje, že vykreslení dané stěny zajišťuje jiný blok. Maximální agregace je 8×8 stěn, což je dáno velikostí pracovní skupiny \textit{compute shaderu} (8×8×8) a tím, že uv souřadnice jsou uloženy ve 2× 4 bitech (rozsah přípustných hodnot je 0–15, pro 16× agregaci by byl třeba rozsah 0–16). Vizualizaci agregace lze v aplikaci aktivovat nastavením vizualizovaných dat (první \textit{combobox} shora) na "Aggregation". Byly implementovány tři metody agregace (lze mezi nimi přepínat 3.~\textit{comboboxem} zespod v menu):
+\begin{itemize}
+	\item \textbf{\inlineDCode{Lines}} agreguje nejprve do maximální míry v jednom směru (2 směry agregace v rovině stěny) a poté spojuje obdélníky stejné délky ve směru druhém.
+	\item \textbf{\inlineDCode{Squares}} agreguje střídavě v jednom a ve druhém směru v mřížce, jejíž velikost se v~každém kroku zdvojnásobí.
+	\item \textbf{\inlineDCode{Squares ext}} přidává k algoritmu \inlineDCode{squares} dodatečný krok, který následně spojuje i~obdélníky nezarovnané do mřížky.
+\end{itemize}
+
+Porovnání efektivity jednotlivých metod je realizováno v oddílu \ref{perf:aggregation}. Problémem agregace je, že vytváří tzv. \textit{T-junctions} (tedy situace, kdy na sebe trojúhelníky nenavazují hranami, ale vrchol jednoho trojúhelníku se nachází na hraně druhého trojúhelníku), které způsobují artefakty v podobě průhledných pixelů (protože OpenGL garantuje přesnou návaznost trojúhelníků pouze v případě, když na sebe trojúhelníky navazují vrcholy). Pro omezení těchto artefaktů byl vytvořen efekt \textit{postprocessingu}, který detekuje bodové díry v~obraze a~vyplňuje je z okolních pixelů.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/aggrNo.\imagesExtension}
+	\hfill
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/aggrLines.\imagesExtension}
+
+	\vspace{2.5mm}
+
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/aggrSquares.\imagesExtension}
+	\hfill
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/aggrSquaresExt.\imagesExtension}
+	\caption{Metody agregace stěn bloků: bez agregace, \inlineDCode{lines}, \inlineDCode{squares}, \inlineDCode{squares ext}. Stěny se stejnou barvou označení jsou agregovány do jednoho vykreslovacího primitiva. Vizualizaci agregace lze v aplikaci aktivovat zvolením položky "Aggregation" v prvním \textit{comboboxu} shora.}
+\end{figure}
+
+Výpočty na GPU probíhají asynchronně, na CPU je uchováván kruhový buffer se synchronizačními bariérami jednotlivých výpočtů. Prevence zahlcení GPU těmito výpočty je realizována zavedením maximálního počtu položek v kruhovém bufferu.
+
+Pravidla optimalizace je dále třeba vhodně rozšířit pro průhledné bloky. Proto byla přidána další verze pravidla: stěny neprůhledných bloků jsou směrem k průhledným blokům vždy vykresleny. Stěny mezi průhlednými bloky nejsou vykresleny pouze v případě, že se jedná o stejný typ bloku.
+\putImage[Průhledné bloky a jejich interakce s bloky neprůhlednými]{transparentBlockFaceOptimizations.\imagesExtension}{width=0.5\textwidth}
+
+\subsection{Vykreslování, \textit{frustum culling}, \textit{depth peeling}}
+V předchozích kapitolách byly popsány metody, jakými se sestavují data pro vykreslování: pro každý region v chunku (\inlineDCode{ChunkRenderRegion}) a pro každý \textit{face context} (\texttt{BlockFace\-Rendering\-Context}) je alokován prostor v atlasu bufferů, ve kterém jsou uloženy informace o vykreslovaných vrcholech. Atlasy jsou celkem dva, jeden pro vrcholy s 8bitovými souřadnicemi (\inlineDCode{GL_UNSIGNED_BYTE}) a jeden pro vrcholy s 32bitovými souřadnicemi v plovoucí řádové čárce (\inlineDCode{GL_FLOAT}).
+
+Pomocí \textit{compute shaderu} je vypočten seznam regionů, které jsou pro kameru viditelné. Tuto funkcionalitu realizuje třída \inlineDCode{FrustumManager}. Každé invokaci odpovídá jeden chunk, invokace iterativně projde všechny regiony v chunku a seznam viditelných regionů serializuje pomocí atomického čítače do \textit{storage bufferu}. Region je považován za viditelný, pokud alespoň jeden z jeho osmi hraničních vrcholů je před \textit{near} rovinou, alespoň jeden vrchol je vpravo od levého okraje obrazovky, alespoň jeden z vrcholů je vlevo od pravého okraje obrazovky a obdobně pro horní a spodní okraj. Detekce těchto podmínek je realizována projekcí souřadnic do prostoru obrazovky (pomocí projekční matice) a následným porovnáním vůči $1$ nebo $-1$; pakliže je komponenta $w$ při projekci menší než nula, jsou výsledky porovnání bočních okrajů invertovány.
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}{\textwidth}
+		\centering
+		\includegraphics[width=0.9\textwidth]{obrazky-figures/frustumCulling1.\imagesExtension}
+	\end{minipage}
+	\vspace{2mm}
+	
+	\caption{Demonstrace \textit{frustum cullingu}; červené čáry v horním obrázku označují hrany a střed projekčního jehlanu. Zelený čtyřúhelník označuje oblast pokrytou \textit{shadow mapou} (pouze orientační). V aplikaci lze do pohledu shora přepnout klávesou F3.}
+\end{figure}
+
+Výpočty jsou současně provedeny pro projekční matici z pohledu hráče a pro matici používanou při \textit{shadow mappingu}. Veškeré vykreslování je realizováno $c \cdot n$ voláními funkce \inlineDCode{glMultiDrawArrays}, kde $c$ je počet \textit{face contexts} v aplikaci (8) a $n$ je počet buffer atlasů (2). Jelikož se využívá jeden velký buffer, je možné vykreslit všechny chunk regiony jedním voláním, stav se musí měnit pouze pro různé \textit{face contexts} (jak již bylo uvedeno, různé kontexty používají různé shadery, mají různé atlasy textur a mohou se lišit v nastavení jako např. \inlineDCode{GL_CULL_FACE}). Výstupem vykreslování jsou hloubková textura, \textit{albedo} a normálová textura. Aplikace zavádí \textit{deferred shading}, tedy stínování je realizováno v \textit{postprocessingu}.
+
+Vykreslování průhledných objektů je řešeno \textit{depth peelingem} s až třemi vrstvami. Všechny průhledné objekty jsou tedy vykresleny několikrát; míchání barev (\inlineDCode{GL_BLEND}) je při vykreslování vypnuto, takže výstupem je vždy průhledný objekt nejblíž kameře. Druhý a třetí průchod však provádí dodatečný \textit{near depth test} (implementovaný ve \textit{fragment shaderu}), který zahazuje ty fragmenty, které jsou blíže ke kameře (nebo ve stejné vzdálenosti) oproti fragmentům z předchozího průchodu.
+
+\putImage[Třívrstvý \textit{depth peeling}, vizualizace jednotlivých vrstev]{depthPeeling.\imagesExtension}{width=0.9\textwidth}
+
+\subsection{Osvětlení} \label{lightingImpl}
+Data osvětlení jsou uchovávána v 3D textuře na GPU. Svět je rozdělen do oblastí o velikosti 128×128×256 voxelů, každá tato oblast odpovídá jedné 3D textuře a je reprezentována třídou \inlineDCode{VisibleArea}. Každá ze čtyř komponent (RGB + denní světlo) je uložena ve čtyřech bitech. Osvětlení je aplikováno jako průchod v \textit{postprocessingu}. Protože OpenGL nativně nepodporuje texturu, kde jsou složky uloženy ve čtyřech bitech (a interně texturu \inlineDCode{GL_RGBA4} ukládá jako \inlineDCode{GL_RGBA8}, což zbytečně plýtvá místem), jsou všechny složky uloženy v jedné komponentě \inlineDCode{GL_R16UI} a korektní interpolace jednotlivých složek při vzorkování je implementována ručně. Aby se při vzorkování dala využít funkce \inlineDCode{textureGather}, která není podporována pro 3D textury, je textura reprezentována jako pole 2D textur, kde vrstvy odpovídají souřadnici $z$ (výška).
+
+Do 4 bitů lze uložit celkem 16 různých úrovní osvětlení (0--15), což souhlasí s omezením dosahu jevů danou velikostí chunku, který má v horizontální rovině rozměr 16 voxelů. Zvýšení maximálního možného dosahu světla by tedy vyžadovalo zvětšení velikosti chunku, a kromě toho také přechod z \inlineDCode{GL_R16UI} na \inlineDCode{GL_R32UI}, což by zdvojnásobilo paměťové nároky.
+
+Celkově je tedy na GPU kromě dat pro vykreslování trojúhelníků (145 MB pro dohl. vzd. 32 chunků) třeba ukládat dva bajty s \textit{block ID} a dva bajty pro údaje o osvětlení na každý voxel. Při dohledové vzdálenosti 32 chunků ($(2\cdot32+1)^2 = 4\,225$ chunků, což odpovídá 276 889 600 voxelů) je tedy potřeba přibližně 1,2 GB grafické paměti; v praxi to může být kolem 2 GB kvůli dalším použitým zdrojům, nedokonalému zarovnání (kdy není využita celá alokovaná textura) a kvůli tomu, že \textit{block IDs} se uchovávají pro všechny \textit{aktivní} chunky, tedy pro oblast s průměrem o dva chunky větší, než je dohledová vzdálenost (protože všichni sousedi \textit{viditelných} chunků musí být \textit{aktivní}).
+
+Výpočet dat osvětlení také probíhá na GPU; celulární algoritmus popsaný v sekci \ref{lightingModel} je vhodný pro akceleraci na grafickém koprocesoru. Pro výpočet osvětlení se využívají i \textit{block IDs} sousedících chunků (8-okolí). Výpočet probíhá v několika krocích (jeden krok odpovídá jednomu spuštění \textit{kernelu}):
+\begin{itemize}
+	\item V prvním kroku se nastaví iniciální hodnoty osvětlení na místa zdrojů světla a propaguje se denní světlo shora dolů. Tento běh probíhá ve 2D (každá invokace odpovídá jednomu sloupci).
+	\item V dalších krocích se výpočty provádějí v diskrétních oblastech 8×8×8 s využitím vláknové kooperace. Mřížka dělení do diskrétních oblastí je v každém běhu posunuta o 4 jednotky ve všech třech směrech, takže mřížka alteruje podobně jako okolí typu \textit{margolus} u celulárních automat. Takto je celkem provedeno pět kroků, což zajistí korektní propagaci i přes dělení výpočtů do diskrétních buněk.
+	\item Jako výsledek se vždy použijí pouze data prostředního chunku. Data okolních chunků se zahodí, protože nejsou kompletní -- nezohledňují zdroje světla od části jejich sousedů.
+\end{itemize}
+
+\begin{figure}[H]
+	\centering
+	\begin{minipage}[t]{0.3\textwidth}
+		\centering
+			\begin{tikzpicture}[scale=0.5]
+			% axes
+			\draw[very thick,->] (0, 0) -- (9, 0);
+			\draw[very thick,->] (0, 0) -- (0, 9);
+			
+			\draw[step=1, thin] (0, 0) grid (8.5, 8.5);
+			
+			\draw[fill=yellow] (4,4) -- (4,5) -- (5,5) -- (5,4) -- cycle;
+			\draw[fill=black] (5,5) -- (5,6) -- (7,6) -- (7,5) -- cycle;
+			\draw[fill=black] (5,5) -- (5,2) -- (6,2) -- (6,5) -- cycle;
+			
+			\draw (4.5, 4.5) circle(0.3) node {\tiny 5};
+			\end{tikzpicture}
+	\end{minipage}
+	\begin{minipage}[t]{0.3\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=0.5]
+		% axes
+		\draw[very thick,->] (0, 0) -- (9, 0);
+		\draw[very thick,->] (0, 0) -- (0, 9);
+		
+		\draw[step=1, thin] (0, 0) grid (8.5, 8.5);
+		
+		\draw[fill=yellow] (4,4) -- (4,5) -- (5,5) -- (5,4) -- cycle;
+		\draw[fill=black] (5,5) -- (5,6) -- (7,6) -- (7,5) -- cycle;
+		\draw[fill=black] (5,5) -- (5,2) -- (6,2) -- (6,5) -- cycle;
+		
+		\draw[step=4, very thick] (0, 0) grid (8.5, 8.5);
+		
+		\draw (4.5, 4.5) circle(0.3) node {\tiny 5};
+		\draw (4.5, 5.5) circle(0.3) node {\tiny 4};
+		\draw (4.5, 6.5) circle(0.3) node {\tiny 3};
+		\draw (4.5, 7.5) circle(0.3) node {\tiny 2};
+		\draw (5.5, 6.5) circle(0.3) node {\tiny 2};
+		\draw (5.5, 7.5) circle(0.3) node {\tiny 1};
+		\draw (6.5, 6.5) circle(0.3) node {\tiny 1};
+		\end{tikzpicture}
+	\end{minipage}
+	\begin{minipage}[t]{0.3\textwidth}
+		\centering
+		\begin{tikzpicture}[scale=0.5]
+		% axes
+		\draw[very thick,->] (0, 0) -- (9, 0);
+		\draw[very thick,->] (0, 0) -- (0, 9);
+		
+		\draw[step=1, thin] (0, 0) grid (8.5, 8.5);
+		
+		\draw[fill=yellow] (4,4) -- (4,5) -- (5,5) -- (5,4) -- cycle;
+		\draw[fill=black] (5,5) -- (5,6) -- (7,6) -- (7,5) -- cycle;
+		\draw[fill=black] (5,5) -- (5,2) -- (6,2) -- (6,5) -- cycle;
+		
+		\draw[very thick] (2, 0) -- (2, 8.5);
+		\draw[very thick] (6, 0) -- (6, 8.5);
+		\draw[very thick] (0, 2) -- (8.5, 2);
+		\draw[very thick] (0, 6) -- (8.5, 6);
+		
+		\draw (4.5, 4.5) circle(0.3) node {\tiny 5};
+		\draw (4.5, 3.5) circle(0.3) node {\tiny 4};
+		\draw (3.5, 4.5) circle(0.3) node {\tiny 4};
+		\draw (4.5, 5.5) circle(0.3) node {\tiny 4};
+		\draw (3.5, 3.5) circle(0.3) node {\tiny 3};
+		\draw (4.5, 2.5) circle(0.3) node {\tiny 3};
+		\draw (3.5, 5.5) circle(0.3) node {\tiny 3};
+		\draw (4.5, 6.5) circle(0.3) node {\tiny 3};
+		\draw (2.5, 4.5) circle(0.3) node {\tiny 3};
+		\draw (2.5, 5.5) circle(0.3) node {\tiny 2};
+		\draw (3.5, 2.5) circle(0.3) node {\tiny 2};
+		\draw (3.5, 6.5) circle(0.3) node {\tiny 2};
+		\draw (4.5, 7.5) circle(0.3) node {\tiny 2};
+		\draw (5.5, 6.5) circle(0.3) node {\tiny 2};
+		\draw (2.5, 3.5) circle(0.3) node {\tiny 2};
+		\draw (2.5, 2.5) circle(0.3) node {\tiny 1};
+		\draw (3.5, 7.5) circle(0.3) node {\tiny 1};
+		\draw (3.5, 7.5) circle(0.3) node {\tiny 1};
+		\draw (2.5, 6.5) circle(0.3) node {\tiny 1};
+		\draw (5.5, 7.5) circle(0.3) node {\tiny 1};
+		\draw (6.5, 6.5) circle(0.3) node {\tiny 1};
+		\end{tikzpicture}
+	\end{minipage}
+	\caption{Šíření světla v alternujících diskrétních oblastech (2D, zmenšené měřítko)}
+\end{figure}
+
+Souhrnně jsou tedy k vykreslování chunků třeba tyto kroky:
+\putImage[Souhrn procesů nutných k vykreslování. Zeleně jsou označeny prostředky a~procesy vázané na GPU, modře na CPU.]{chunkRenderProcess.pdf}{width=\textwidth}
+
+\section{\textit{Postprocessing}}
+Postprocessing se skládá z následujících průchodů: \nopagebreak
+\putImage[Průchody při \textit{postprocessingu}]{postprocessing.pdf}{width=\textwidth}
+
+Postprocessing tedy obsahuje jeden lokální průchod pro každou vrstvu (neprůhledná + 3 vrstvy \textit{depth peelingu}), dva globální průchody plus výpočty rozostření. V lokálních průchodech se počítá osvětlení (na základě inverzní projekční matice a hloubkové textury se pixely obrazovky promítnou do světa a vzorkuje se 3D textura s osvětlením, jak bylo popsáno v oddílu \ref{lightingImpl}) a \textit{shadow mapping} pro sluneční světlo. Světelné mapy jsou \textit{shaderu} předány formou \textit{bindless} textur v uniformní paměti. Pokud by každému chunku odpovídala jedna textura, při dohledové vzdálenosti 32 chunků ($(32 \cdot 2 + 1)^2 = 4\,225$ chunků celkem) a velikosti ukazatele na texturu 8 B by bylo třeba 34\,kB uniformní paměti, což překračuje minimální garantovanou velikost 16 kB. Proto byla data agregována do větších textur o~velikosti 128×128×256 bloků (8×8 chunků, spravované třídou \inlineDCode{VisibleArea}, jak bylo uvedeno v oddílu \ref{lightingImpl}), což redukuje paměťové nároky 64krát. Data pro vlastní emisi pixelů (\textit{glow map}) jsou uložena v alfa kanálu normálové textury.
+
+V aplikaci je implicitně aktivován 2× \textit{multisampling}; lokální průchody v důsledku toho pracují s \textit{multisample} texturami. Výstupem lokálních průchodů jsou již jednovrstvé textury se stínovaným obrazem. Z prvního \textit{depth peeling průchodu} (tedy pro objekty nejblíž ke kameře) je pro další \textit{postprocessing} exportována hloubková a normálová mapa. V případě vypnutého \textit{depth peelingu} se mapy exportují z neprůhledného průchodu.
+
+\pagebreak
+\subsection{\textit{Shadow mapping}}
+\textit{Shadow mapping} využívá \textit{percentage closer filtering} \cite{ReevesWilliamT.1987Rasw}, vzorkuje se oblast 2×2 texelů pomocí jednoho volání funkce \inlineDCode{textureGather} a výsledek se interpoluje (textura má nastaveno \inlineDCode{GL_TEXTURE_COMPARE_FUNC} na \inlineDCode{GL_LEQUAL}, takže normalizaci souřadnic a porovnávání vůči hloubkové mapě zajišťuje OpenGL).
+
+\putImage[Stín vrhaný sluncem, rozlišení \textit{shadow mapy} $2048^2$, aplikován \textit{percentage closer filtering}]{shadowMapping.\imagesExtension}{width=0.9\textwidth}
+
+Vzorkované souřadnice jsou mírně posunuty ve směru normály a porovnávaná hloubka je mírně snížena, aby se předešlo artefaktům na stěnách téměř rovnoběžných se slunečním světlem.
+
+\putImage[Artefakty v \textit{shadow mappingu} při velkých úhlech mezi normálou povrchu a~dopadajícího světla]{shadowMappingArtefact.\imagesExtension}{width=0.9\textwidth}
+
+Výpočet osvětlení vzniká aditivní kombinací 4 složek (\textit{ambientní} složka, složka umělého osvětlení, \textit{ambientní} složka slunečního světla a směrová složka slunečního světla), jak bylo uvedeno v rovnici \ref{lightingEq}. Pakliže je aktivovaný \textit{shadow mapping}, směrová složka denního osvětlení se dále násobí s jeho výstupem.
+
+\textit{Shadow mapping} vyžaduje dodatečné vykreslení scény ortogonální maticí "z pohledu slunce". Při vykreslování do stínové mapy je \textit{face culling} zapnutý pro všechny kontexty, aby se předešlo např. prosvítání slunečního světla skrze stěny jeskyní. Pro kontexty, které to vyžadují, se provádí \textit{alpha testing}. Průhlednost stínů lineárně klesá se vzdáleností od kamery, ve vzdálenosti 50 bloků je už aplikován pouze standardní osvětlovací model. Je zavedena optimalizace upravující projekční matici tak, aby byla vykreslována pouze oblast před kamerou: do neoptimalizované matice je promítnuto všech osm vrcholů pohledového jehlanu kamery a matice je posunuta a škálována tak, aby vykreslovaná oblast odpovídala obalovému obdélníku promítnutých bodů. Do stínové mapy nejsou vykresleny průhledné bloky, v důsledku čehož nevrhají žádný stín.
+
+\subsection{\textit{Screen space ambient occlusion (SSAO)}}
+V prvním globálním průchodu dochází ke kombinaci jednotlivých vrstev a k výpočtům \textit{SSAO}. \textit{SSAO} byla původně zamýšlena jako suplementární technika k "přirozenému" \textit{ambient occlusion}, které je důsledkem osvětlovacího modelu -- ten dobře funguje pro plné krychle, ale nepokrývá detaily vznikající např. při vykreslování vegetace. Pro neuspokojivé výsledky a vysokou výpočetní náročnost je však SSAO ve výchozím nastavení deaktivované.
+
+\textit{SSAO} pro každý pixel sbírá 2 až 8 vzorků hloubky (dle vzdálenosti pixelu od kamery) v polokouli dané vzdáleností a normálou pixelu. Vzorky jsou umístěné do 2D spirály vůči normále, hloubka je pak daná uniformním rozložením. Na efekt \textit{SSAO} je aplikováno 9×9 Gaussovo rozostření se $\sigma = 3$.
+
+\begin{figure}[H]
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/ssaoOff.\imagesExtension}
+	\hfill
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/ssaoOn.\imagesExtension}
+	\caption{Scéna s deaktivovaným (vlevo) a aktivovaným (vpravo) \textit{screen space ambient occlusion}}
+\end{figure}
+
+\subsection{\textit{Depth of Field (DOF)}}
+Aplikace neimplementuje efekt \textit{depth of field} v takovém smyslu, jak byl popsán v oddílu \ref{dof}, spíše se jedná o efekt rozostření při průchodu atmosférou. Rozostřeny jsou tedy vždy objekty nejdále od kamery. Implementace provádí rozostření výstupu prvního globálního průchodu a v druhém průchodu interpoluje tento rozostřený obraz s původním na základě hloubkové informace. Rozostření je realizováno dvěma průchody (horizontální + vertikální) bilaterálním (zachovávající ostré hrany, počítá se rozdíl mezi vzorky v hloubkové textuře) Gaussovým filtrem s jádrem o velikosti 9 pixelů ($4+1+4$) a $\sigma = 2$. V prvním globálním průchodu je obraz navíc na základě hloubky smíšen s barvou pozadí (\textit{skybox} bez složek souvisejících se sluncem) a zprůhledněn na základě vzdálenosti od kamery, čímž vzniká atmosférický efekt.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=\textwidth]{obrazky-figures/dofOff.\imagesExtension}
+	\caption{Scéna s deaktivovaným \textit{depth of field} a atmosférickým efektem}
+\end{figure}
+
+\vfill
+	
+\begin{figure}[H]
+	\includegraphics[width=\textwidth]{obrazky-figures/dofOn.\imagesExtension}
+	\caption{Scéna s aktivovaným \textit{depth of field} a atmosférickým efektem}
+\end{figure}
+
+\pagebreak
+\subsection{\textit{God rays}}
+Pro krepuskulární paprsky byla zvolena metoda popsaná panem Wesleym, která efekt počítá ve \textit{screen space}. Originální metoda pracuje s "emisní texturou", která pro každý pixel ukládá "emisivitu" od zdroje světla. Pokud je pozadí překryté popředím, je toto reflektováno i~v~emisní textuře a odpovídající pixely jsou černé. Pro každý pixel ve scéně se pak sbírá určitý počet vzorků mezi výchozím pixelem a zdrojem světla a vzorkované hodnoty se sčítají. Výsledný součet je přičten k výstupu.
+
+Místo vzorkování po celé přímce je v této práci vzorkována pouze úzká oblast pixelů v~kotouči slunce (protože zbytek scény má nulovou emisi). Vzorkuje se pouze \textit{depth buffer}, barva emise se počítá přímo v \textit{shaderu} a je pro všechny vzorky uvnitř slunce stejná.
+
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}	
+	\draw[fill=yellow] (5,5) circle (1);
+	\draw[fill=black] (1,1) circle (0.1);
+	
+	\draw[fill=black, transparent, opacity=0.5] (1,2.5) -- (1,4.5) -- (6,4.5) -- (6,2.5) -- cycle;
+	\draw[dashed] (1,1) -- (5,5);
+	
+	\draw[fill=white] (2,2) circle (0.07);
+	\draw[fill=black] (3,3) circle (0.07);
+	\draw[fill=black] (4,4) circle (0.07);
+	\draw[fill=yellow] (5,5) circle (0.07);
+	\end{tikzpicture}
+	\hspace{20mm}
+	\begin{tikzpicture}
+	\draw[fill=yellow] (5,5) circle (1);
+	\draw[fill=black] (1,1) circle (0.1);
+	\draw[fill=black,  transparent, opacity=0.5] (1,2.5) -- (1,4.5) -- (6,4.5) -- (6,2.5) -- cycle;
+	\draw[dashed] (1,1) -- (5,5);
+	
+	\draw[fill=black] (4.3,4.3) circle (0.07);
+	\draw[fill=black] (4.53,4.53) circle (0.07);
+	\draw[fill=yellow] (4.76,4.76) circle (0.07);
+	\draw[fill=yellow] (5,5) circle (0.07);
+	\end{tikzpicture}
+	\caption{Původní navržené vzorkování (vlevo) vs. implementované vzorkování (vpravo) v efektu \textit{god rays}}
+\end{figure}
+
+\putImage[\textit{God rays} v aplikaci]{godRays.\imagesExtension}{width=\textwidth}
+
+Tato implementace ke slunci částečně přistupuje jako k bodovému zdroji světla (nikoli jako ke kruhovému). Důsledkem toho je, že pokud je zakryta spodní část slunce (od středu dolů), slunce vrhá paprsky pouze nahoru, i když by vrchní polovina slunce měla taktéž vrhat paprsky. Pro odstranění tohoto jevu by bylo třeba vzorkovat celou plochu slunečního kotouče, nikoli pouze přímku mezi výchozím pixelem a středem slunce.
+
+\begin{figure}[H]
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/godRays_dem1.\imagesExtension}
+	\hfill
+	\includegraphics[width=0.49\textwidth]{obrazky-figures/godRays_dem2.\imagesExtension}
+	\caption{Zakrytí slunce od středu k některému okraji zamezuje vrhání paprsků do daného směru ve zvolené implementaci \textit{god rays}}
+\end{figure}
+
+\section{\textit{Skybox} a střídání dne a noci}
+
+\textit{Skybox} je dynamicky generován v druhém globálním průchodu \textit{postprocessingu}; současně je také jeho část počítána v prvním průchodu pro barvu atmosféry v DOF. Většina výpočtů pracuje s normálou kamery (a vše je tedy založené na úhlech), slunce se ale počítá ve \textit{screen space} kvůli deformacím, které by vznikaly při promítání sférického \textit{skyboxu} na rovinu.
+
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}[scale=0.5]		
+	\draw[gray] (0,0) -- (-55:4) -- (55:4) -- cycle;
+	
+	\draw (0,0) -- (51.5:8);
+	\draw (0,0) -- (44.5:8);
+	
+	\draw (0,0) -- (3.5:8);
+	\draw (0,0) -- (-3.5:8);
+	
+	\draw[fill=black] (0,0) -- (-55:2) -- (55:2) -- cycle;
+	\draw[fill=white] (0,0) circle (0.8);
+	\draw[dashed] (8,0) arc (0:45:8);
+	\draw[dashed] (8,0) arc (0:-45:8);
+	
+	\draw[fill=yellow] (8,0) circle (0.5);
+	\draw[fill=yellow] (48:8) circle (0.5);
+	
+	\draw[very thick, red] (2.3,2.9) -- (2.3,2.3);
+	\draw[very thick, red] (3.5:2.3) -- (-3.5:2.3);
+	\end{tikzpicture}
+	\hspace{4cm}
+	\includegraphics[height=6.5cm]{obrazky-figures/sunDeformation.\imagesExtension}
+	\caption{Demonstrace deformace slunce při promítání na rovinu}
+\end{figure}
+
+Výpočet pak probíhá pouze pro pixely s průhledností menší než jedna (\textit{skybox} se tedy nepočítá pro pixely zcela překryté popředím). Barva každého pixelu se počítá dle následující rovnice:
+
+\begin{equation}
+\begin{array}{r l l}
+	k_1 = & \text{clamp}_{\langle 0,1 \rangle}((\vec{n}_z + 0.1) \cdot 5)^2 & \text{(výška nad horizontem)} \\
+	d_{sun} = & |\vec{n}_{light} - \vec{n}| \\
+	\vec{c} = & \vec{c}_{base} \cdot (0.4 + 0.6 \cdot k_1) & \text{(základní barva)} \\
+	& + \vec{c}_{horizon} \cdot (1 - |\vec{n}_z|) & \text{(horizont)} \\
+	& + \vec{c}_{halo} \cdot \max_0(1 - d_{sun} \cdot 0.5) \text{,} & \text{(záře od slunce)} \\
+	& + \vec{c}_{sun} \cdot min(1, s_{size} / d_{sunPx}) ^ {s_{pow}} \cdot k12 & \text{(slunce)}
+\end{array}
+\end{equation}
+
+kde $\vec{n}$ je normála kamery, $\vec{n}_{light}$ je normála denního světla, $\vec{c}_{XX}$ jsou barvy jednotlivých složek, $s_{size}$ je parametr udávající velikost slunce, $d_{sunPx}$ je vzdálenost od středu slunce v~pixelech a $s_{pow}$ je parametr ovlivňující velikost prstence slunce.
+
+\textit{Skybox} se tedy aditivně skládá ze čtyř vrstev:
+\begin{compactenum}
+	\item Základní složka (která je pro spodní polovinu \textit{skyboxu} vynásobena koeficientem $0.6$)
+	\item Složka horizontu
+	\item Složka horizontu v okolí slunce
+	\item Slunce
+\end{compactenum}
+
+\begin{figure}[H]
+	\includegraphics[width=0.24\textwidth]{obrazky-figures/skyboxL1.\imagesExtension}
+	\hfill
+	\includegraphics[width=0.24\textwidth]{obrazky-figures/skyboxL2.\imagesExtension}
+	\hfill
+	\includegraphics[width=0.24\textwidth]{obrazky-figures/skyboxL3.\imagesExtension}
+	\hfill
+	\includegraphics[width=0.24\textwidth]{obrazky-figures/skyboxL4.\imagesExtension}
+	\caption{Postupná aplikace jednotlivých složek \textit{skyboxu}}
+\end{figure}
+
+Parametry ovlivňující vzhled \textit{skyboxu} jsou \textit{shaderu} předávány přes uniformní paměť. Hodnoty nejsou konstantní, počítají se interpolací z přednastavených hodnot na základě denní doby. Hodnoty parametrů pro \textit{skybox} určuje třída \inlineDCode{WorldEnvironment} (implementace pro výchozí svět je v třídě \inlineDCode{WorldEnvironment_Overworld}). V noci je měsíc vykreslován stejným způsobem, jakým je ve dne vykreslováno slunce -- to zahrnuje i \textit{shadow mapping}, \textit{god rays} a složku denního světla v osvětlovacím modelu.  Návrh tohoto \textit{skyboxu} se nezakládá na žádných publikacích.
+
+\putImage[Denní doba v aplikaci: ráno]{skybox1.\imagesExtension}{width=\textwidth}
+
+\vfill
+
+\putImage[Denní doba v aplikaci: dopoledne]{skybox2.\imagesExtension}{width=\textwidth}
+
+\putImage[Denní doba v aplikaci: večer]{skybox3.\imagesExtension}{width=\textwidth}
+
+\vfill
+
+\putImage[Denní doba v aplikaci: noc]{skybox4.\imagesExtension}{width=\textwidth}
+
+\chapter{Aplikace} \label{ch:app}
+Na přiloženém disku lze nalézt jak předkompilovanou verzi aplikace (pro Windows x64), tak její zdrojové kódy. K sestavení aplikace je třeba mít nainstalován kompilátor D. Ten lze stáhnout z \url{https://dlang.org/}, na linuxových systémech bývá k dispozici jako balíček \verb|dmd|. Aplikace se sestaví příkazem \verb|dub build --build=release --arch=x86_64|, binární soubor se vytvoří ve složce \verb|bin_x86_64| (resp. jiný prefix pro jinou architekturu). Pro spuštění je vyžadovaná grafická karta s podporou OpenGL 4.6+ a 4 GB grafické paměti. Předkompilované binární soubory lze spustit přímo z CD; v tom případě je ale SQLite databáze se světem vedená v paměti RAM a svět se neukládá na disk.
+
+Aplikaci lze spustit s následujícími parametry:
+\begin{itemize}
+	\item \verb|--help|: Vypíše nápovědu
+	\item \verb|--saveGame=name|: Nastavuje název souboru se hrou
+	\item \verb|--recreate|: Při spuštění zajistí nové vygenerování světa se stejným semínkem (zmizí veškeré zásahy hráče)
+	\item \verb|--fullScreen|: Spustí aplikaci v režimu celé obrazovky
+	\item \verb|--debuGL|: Aktivuje ladicí režim OpenGL s vypisováním chyb do konzole
+	\item \verb|--colectPerfData|: Aktivuje ukládání metrik do csv souboru.
+	\item \verb|--position=X|: Umístí kameru do pozice $X$, která je uložená v souboru \inlineDCode{positions.txt}. Pozice se do tohoto souboru dají ukládat stiskem klávesy F5.
+\end{itemize}
+
+Soubory uložených her se ukládají do složky \verb|save|.
+
+\begin{tableFloat}[H]
+	\begin{tabular}{c l}
+		\textbf{Vstup} & \textbf{Akce} \\ \hline
+		\textbf{Prostřední tlačítko} myši & Zapnutí/vypnutí ovládání kamery myší \\
+		\textbf{Levé tlačítko} myši & Zničení bloku \\
+		\textbf{Pravé tlačítko} myši & Postavení bloku \\
+		\textbf{Kolečko} myši & Výběr typu bloku (náhled vlevo dole) \\
+		\textbf{W, A, S, D} & Pohyb kamery po horizontální rovině \\
+		\textbf{Shift/Ctrl} nebo E/Q & Pohyb kamery nahoru/dolů \\
+		\textbf{Mezerník} & Skok (pouze v režimu gravitace) \\
+		\textbf{Esc} & Ukončení aplikace \\
+		\textbf{F2} & Zobrazit/skrýt GUI \\
+		\textbf{F3} & Pohled shora (náhled \textit{frustum cullingu}) \\
+		\textbf{F4} & Zapnutí/vypnutí vizualizace načítání chunků \\
+		\textbf{F5} & Uložit aktuální pozici kamery do \inlineDCode{positions.txt} \\
+		\textbf{F6} & Načíst pozici kamery z \inlineDCode{positions.txt} (cyklicky prochází všechny záznamy) \\
+		\textbf{O/P} & Posun denní doby \\
+		\textbf{I} & Zapnutí/vypnutí automatického posunu denní doby \\
+	\end{tabular}
+	\caption{Ovládání aplikace}
+\end{tableFloat}
+
+\vfill
+\putImage[Náhled aplikace]{appSshot.\imagesExtension}{width=\textwidth}
+
+\pagebreak
+V pravé části obrazovky je jednoduché GUI, kde lze měnit různá nastavení:
+\begin{enumerate}
+	\item \textbf{Zobrazovaná data}; Pro ladicí účely lze místo textur zobrazovat např. normálu, hloubkové informace apod. Jednou z možností je "Aggregation", která vizualizuje agregaci stěn.
+	
+	\item \textbf{\textit{Shading}}. Druhým \textit{comboboxem} lze zapnout/vypnout stínování bloků (které je realizované v \textit{postprocessingu}). Protože aplikace podporuje \textit{multisampling}, lze zvolit, zda se má stínování provádět pro každý vzorek zvlášť (\verb|MSAA Shading|), nebo zda se má pracovat pouze s jedním vzorkem na pixel (\verb|Final pixel shading|). V druhém případě se pracuje s nejnižší hodnotou hloubky v pixelu (pro výpočet souřadnic pixelu ve světě). Hodnoty normál se průměrují, což do jisté míry nahrazuje vyhlazování hran. Agregované stínování i tak způsobuje artefakty, když jsou v jednom pixelu dva vzorky, pro které by osvětlení správně mělo mít razantně rozdílné hodnoty.
+	
+	\putImage[Artefakty vznikající na hranách, kde je velký rozdíl osvětlení popředí a pozadí, při \textit{final sample shadingu}]{finalSampleShdArtefact}{width=0.9\textwidth}
+
+	\item \textbf{\textit{Screen space ambient occlusion}}. V tomto menu lze zapnout \textit{SSAO}, případně zobrazit jeho nerozostřený výstup.
+	
+	\item \textbf{\textit{Multisampling}}
+	\item \textbf{\textit{Shadow mapping}} a velikost \textit{shadow mapy}.
+	\item \textbf{\textit{Depth of field}}
+	\item \textbf{Atmosférický efekt} prolnutí s barvou \textit{skyboxu} a zprůhlednění na základě vzdálenosti od kamery
+	\item \textbf{\textit{God rays}}
+	\item \textbf{Dohledová vzdálenost}. Celkově je zobrazeno $(x+1+x)^2$ chunků, kde $x$ je číslo udané v GUI.
+	
+	\item \textbf{Zobrazení jednotlivých vrstev \textit{depth peelingu}}
+	
+	\item \textbf{Počet vrstev \textit{depth peelingu}}. V tomto menu lze transparentní vykreslování úplně vypnout nebo změnit počet průhledných vrstev. Vizualizace vypadá plnohodnotně už při jedné vrstvě a protože je tato technika výpočetně náročná, pro slabší počítače se doporučuje počet vrstev omezit.
+	
+	\item \textbf{Lepší texturování}. Tato volba zapíná vlastní \textit{mag} filtrování u textur \\(\inlineDCode{GL_TEXTURE_MAG_FILTER}). Textury použité v aplikaci nejsou vhodné pro lineární \textit{mag} filtrování, protože pak vypadají rozmazaně; \inlineDCode{GL_NEAREST} je vhodnější, nicméně ten způsobuje \textit{aliasing} na přechodech mezi texely. Proto bylo vytvořeno vlastní filtrování (implementované ve \textit{fragment shaderu}), které sice provádí lineární interpolaci, ale pouze na okrajích texelů (míra závisí na \textit{level of detail}). Toto filtrování je o něco dražší, a proto se aplikuje pouze na vybrané \textit{block faces}, na kterých by byly artefakty patrné.
+	
+	\begin{figure}[H]
+		\includegraphics[width=0.49\textwidth]{obrazky-figures/filteringLinear.\imagesExtension}
+		\hfill
+		\includegraphics[width=0.49\textwidth]{obrazky-figures/filteringNear.\imagesExtension}
+		
+		\vspace{2.2mm}
+		
+		\includegraphics[width=0.49\textwidth]{obrazky-figures/filteringBetter.\imagesExtension}
+		
+		\caption{Filtrování textur: \inlineDCode{GL_LINEAR}, \inlineDCode{GL_NEAREST}, vlastní implementace}
+	\end{figure}
+	
+	\pagebreak
+	\item \textbf{\textit{Multisample alpha testing}}. V případě aktivování této možnosti se \textit{alpha testing} provádí pro každý vzorek \textit{multisamplingu}, u vybraných \textit{face contexts} se tedy \textit{fragment shader} invokuje pro každý vzorek (namísto výchozí jedné invokace na pixel).
+	
+	\begin{figure}[H]
+		\includegraphics[width=0.49\textwidth]{obrazky-figures/msaaAlTestOn.\imagesExtension}
+		\hfill
+		\includegraphics[width=0.49\textwidth]{obrazky-figures/msaaAlTestOff.\imagesExtension}
+		
+		\caption{Aktivní (vlevo) a neaktivní (vpravo) \textit{multisample alpha testing}}
+	\end{figure}
+	
+	\item \textbf{Agregace}. Tato položka umožňuje zvolit metodu agregace primitiv, jak bylo popsáno v sekci \ref{buildDrawData}.
+	
+	\item \textbf{\textit{T-junction hiding}} aktivuje efekt v \textit{postprocessingu}, který potlačuje artefakty způsobené \textit{t-junctions}, které jsou při agregaci vytvářeny, viz sekce \ref{buildDrawData}.
+	
+	\item \textbf{Animace bloků}. Tato možnost umožňuje vypnout animaci bloků (vlání ve větru, vlnění hladiny).
+
+	\item \textbf{Módy pohybu}. V tomto menu lze zvolit mód pohybu: rychlý bez kolizí, středně rychlý bez kolizí, pomalý s kolizemi, pomalý s kolizemi a gravitací. Kolize jsou implementovány jednoduchým AABB.
+	
+	\item \textbf{Denní doba}. Posunem jezdce lze měnit denní dobu světa.
+\end{enumerate}
+
+\section{Typy bloků}
+\begin{tableFloat}[H]
+	\newcommand{\blockImage}[1]{\includegraphics[width=1cm]{obrazky-figures/blocks/#1.\imagesExtension}}
+	\begin{tabularx}{\textwidth}{>{\vspace{1mm}\centering}m{4cm} >{\centering}m{3cm} >{\arraybackslash}m{7cm}}
+		\textbf{Náhled} & \textbf{Název} & \textbf{Zvláštní efekty} \\ \hline
+		\blockImage{stone} \blockImage{dirt} \blockImage{grass} \blockImage{snow} \blockImage{sand} & Kámen, hlína, tráva, sníh, písek & \\
+		\blockImage{ore} & Ruda & Ruda je vidět i bez zdroje světla (textura má vlastní emisi), vydává slabé světlo, generuje se pod zemí \\
+		\blockImage{log} & Kmen stromu & Různé textury na bocích a na vrchu/vespod \\
+		\blockImage{flower1} \blockImage{flower2} \blockImage{flower3} \blockImage{grassTuft} & Květiny, tráva & Vršek vlaje ve větru, blok ve tvaru X \\
+		\blockImage{wheat} & Obilí & Vršek vlaje ve větru, blok ve tvaru \# \\
+		\blockImage{shroom1} \blockImage{shroom2} & Houby & Blok ve tvaru X \\
+		\blockImage{glowShroom} & Svítící houba & Blok ve tvaru X, modře svítí, generované v jeskyních \\
+		\blockImage{leaves} & Listí & Celý blok vlaje ve větru \\
+		\blockImage{cactus} & Kaktus & Blok ve tvaru \# (stěny jsou oproti obilí blíže k okrajům) \\
+		\blockImage{lampW} \blockImage{lampR} \blockImage{lampG} \blockImage{lampB} & Lampy & Vydávají světlo (různé barvy) \\
+		\blockImage{glass} & Sklo & Průhledné \\
+		\blockImage{water} & Voda & Průhledné, hladina se vlní
+	\end{tabularx}
+	\caption{Přehled typů bloků v aplikaci}
+\end{tableFloat}
+
+Všechny uvedené bloky lze stavět a ničit (pro stavění se vybere blok pomocí kolečka myši a postaví se stiskem pravého tlačítka; ničí se levým tlačítkem). Všechny bloky kromě lamp a skla jsou generovány ve světě. Všechny bloky kromě květin, obilí, trávy a hub kolidují s~hráčem a nelze jimi procházet (pakliže jsou zapnuté kolize).
+
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}[scale=2]		
+		\draw[thick,->] (0, 0, 0) -- (1.5, 0, 0);
+		\draw[thick,->] (0, 0, 0) -- (0, 1.5, 0);
+		\draw[thick,->] (0, 0, 0) -- (0, 0, -1.5);
+		
+		\draw[fill=black, opacity=0.25] (0,0,0) -- (1,0,-1) -- (1,1,-1) -- (0,1,0) -- cycle;
+		\draw[fill=black, opacity=0.25] (1,0,0) -- (0,0,-1) -- (0,1,-1) -- (1,1,0) -- cycle;
+	\end{tikzpicture}
+	\hspace{20mm}
+	\begin{tikzpicture}[scale=2]		
+	\draw[thick,->] (0, 0, 0) -- (1.5, 0, 0);
+	\draw[thick,->] (0, 0, 0) -- (0, 1.5, 0);
+	\draw[thick,->] (0, 0, 0) -- (0, 0, -1.5);
+	
+	\draw[fill=black, opacity=0.25] (0.33,0,0) -- (0.33,1,0) -- (0.33,1,-1) -- (0.33,0,-1) -- cycle;
+	\draw[fill=black, opacity=0.25] (0.66,0,0) -- (0.66,1,0) -- (0.66,1,-1) -- (0.66,0,-1) -- cycle;
+	
+	\draw[fill=black, opacity=0.25] (0,0,-0.33) -- (0,1,-0.33) -- (1,1,-0.33) -- (1,0,-0.33) -- cycle;
+	\draw[fill=black, opacity=0.25] (0,0,-0.66) -- (0,1,-0.66) -- (1,1,-0.66) -- (1,0,-0.66) -- cycle;
+	\end{tikzpicture}
+	\caption{Zvláštní tvary bloků: X (vlevo) a \# (vpravo)}
+	\label{blockShapesDiagram}
+\end{figure}
+
+\section{Výkon} \label{perf}
+Tento oddíl se věnuje zhodnocení a optimalizaci výkonu aplikace. Všechna zde uvedená měření se vztahují na referenční prostředí:
+
+\begin{compactitem}
+	\item Notebook Acer Aspire VN7-592G
+	\item GPU nVidia GeForce GTX 960M, 4 GB GDDR5
+	\item CPU Intel i7-6700HQ, 4× 2,6 – 3,5 GHz + HyperThreading
+	\item RAM 2× 8 GB DDR4, 2133 MHz
+	\item HDD 1 TB, 5400 RPM
+	\item OS Windows 10 x64
+	\item Aplikace 1920×1080 v režimu celé obrazovky
+	\item Sestavení aplikace pro architekturu \inlineDCode{x86_64} v režimu \inlineDCode{release} kompilátorem \inlineDCode{dmd} (\inlineDCode{dub build --build=release --arch=x86_64})
+\end{compactitem}
+\vspace{3mm}
+
+\noindent Pokud není uvedeno jinak, měření probíhá při těchto podmínkách:
+\begin{compactitem}
+	\item 2× MSAA, \textit{MSAA shading}, \textit{MSAA alpha testing}
+	\item \textit{Shadow mapping} 2048×2048
+	\item Deaktivované SSAO
+	\item Aktivní DOF, \textit{god rays}, animace bloků, lepší texturování
+	\item 3 vrstvy \textit{depth peelingu}
+	\item \inlineDCode{Squares ext} agregace, \textit{T-junction hiding}
+	\item Dohledová vzdálenost 32 chunků
+\end{compactitem}
+\vspace{3mm}
+
+\noindent Měření budou prováděna na níže uvedených scénách. Scéna definuje přesnou pozici a natočení kamery ve světě a navíc i denní dobu, protože s pohybem slunce se mění i data vykreslovaná do \textit{shadow mapy}. Svět s referenčními scénami je přítomen na přiloženém CD. Z CD nicméně nelze světy načítat, takže je třeba aplikaci zkopírovat na disk a soubor terénu \inlineDCode{/referenceScenes.sqlite} přesunout do složky \inlineDCode{save} (umístěné na stejné úrovni se složkou \inlineDCode{bin}). Poté je možné jednotlivé scény zobrazit příkazem \inlineDCode{./ac --saveName=referenceScenes --position=x}, kde \inlineDCode{x} je číslo scény mínus jedna.
+
+\begin{tableFloat}[H]
+	\centering
+	\def\arraystretch{1.5}
+	\begin{tabular}{l l L{12cm}}
+		\textbf{\#} & \textbf{Název} & \textbf{Vlastnosti} \\ \hline
+		1 & Oceán & Velké množství průhledných bloků. \\
+		2 & Poušť & Většinou pouze krychlové bloky, zcela bez průhledných bloků. \\
+		3 & Krajina & Velké množství vegetace a listů -- \textit{alpha testing}, animace bloků. Listí není neprůhledné, takže se stěny listí vykreslují i uvnitř koruny. Vegetace se nedá agregovat. \\
+		4 & Jeskyně & Pohled dolů, malé množství viditelných chunků i při velkých vykreslovacích vzdálenostech. Zcela bez průhledných bloků. \\
+	\end{tabular}
+	\caption{Přehled referenčních scén pro měření výkonu}
+\end{tableFloat}
+
+\vfill
+
+\begin{figure}[H]
+	\begin{tikzpicture}
+	\node[anchor=north west] at (0,0) {\includegraphics[width=0.49\textwidth]{obrazky-figures/test1.\imagesExtension}};
+	\node[circle, fill=white] at (5mm, -5mm) {\textbf{1}};
+	\end{tikzpicture}
+	\hfill
+	\begin{tikzpicture}
+	\node[anchor=north west] at (0,0) {\includegraphics[width=0.49\textwidth]{obrazky-figures/test2.\imagesExtension}};
+	\node[circle, fill=white] at (5mm, -5mm) {\textbf{2}};
+	\end{tikzpicture}
+	
+	\begin{tikzpicture}
+	\node[anchor=north west] at (0,0) {\includegraphics[width=0.49\textwidth]{obrazky-figures/test3.\imagesExtension}};
+	\node[circle, fill=white] at (5mm, -5mm) {\textbf{3}};
+	\end{tikzpicture}
+	\hfill
+	\begin{tikzpicture}
+	\node[anchor=north west] at (0,0) {\includegraphics[width=0.49\textwidth]{obrazky-figures/test4.\imagesExtension}};
+	\node[circle, fill=white] at (5mm, -5mm) {\textbf{4}};
+	\end{tikzpicture}
+	
+	\caption{Referenční scény pro měření výkonu}
+\end{figure}
+
+\noindent Při měření se budou používat tyto metriky: \nopagebreak
+\begin{tableFloat}[H]
+	\def\arraystretch{1.5}
+	\centering
+	\begin{tabular}{c c L{10cm}}
+		\textbf{Metrika} & \textbf{Jednotka} & \textbf{Popis} \\ \hline
+		$FPS$ & -- & Počet vykreslených snímků za vteřinu. Měří se modus mezi počtem snímků v každé vteřině. Měření probíhá po načtení všech chunků. \\
+		$T_{load}$ & s & Čas mezi spuštěním aplikace a načtením (načtení z disku, sestavení vykreslovacích dat, výpočet osvětlení) všech chunků v dohledové vzdálenosti. \\
+		$V_{dist}$ & chunky & Dohledová vzdálenost v chuncích. Dohledová vzdálenost $d$ odpovídá $(2d + 1)^2$ \textit{viditelným} chunkům. \\
+		$N_\triangle$ & -- & Počet vykreslovaných trojúhelníků. \\
+		$N_\triangle^+$ & $O/T/S$ & Počet vykreslovaných trojúhelníků. Údaj je rozdělen na trojúhelníky vykreslované jako neprůhledné ($O$), trojúhelníky vykreslované v jedné vrstvě \textit{depth peelingu} ($T$) a trojúhelníky vykreslované do \textit{shadow mapy} ($S$). Celkový počet vykreslovaných trojúhelníků je $O + T \cdot d + S$, kde $d$ je počet vrstev \textit{depth peelingu}. \\
+	\end{tabular}
+	\caption{Metriky používané při měření výkonu}
+\end{tableFloat}
+
+
+\noindent Následující oddíly se věnují měření vlivu jednotlivých faktorů na výkon aplikace. Hlavní faktory ovlivňující výkon jsou:
+\begin{compactenum}
+	\item Počet vykreslovaných trojúhelníků
+	\item Počet \textit{aktivních} chunků: každý snímek se iteruje přes všechny \textit{aktivní} chunky a volá se funkce \inlineDCode{step}
+	\item Vykreslovací vzdálenost: vykreslovací vzdálenost zvyšuje nároky na výpočet \textit{frustum cullingu}, s rostoucím počtem viditelných \textit{chunk regionů} roste režie CPU při sestavování seznamu bufferů k vykreslení.
+	\item \textit{Postprocessing} efekty
+	\item Procedurální generování chunků: procedurální generování je akcelerované na GPU, takže grafická karta musí dělit výkon mezi generováním a vykreslováním. Generování je také pomalejší než načítání.
+\end{compactenum}
+
+\pagebreak
+\subsection{Konstanty}
+Aplikace obsahuje několik pro výkon relevantních konstant:
+\begin{compactenum}
+	\item Rozměry chunku
+	\item Výška \textit{chunk regionu}
+	\item Velikosti pracovních skupin shaderů
+	\item Rozměry \textit{light mapy} (třída \inlineDCode{VisibleArea}) -- 3D textury, ve které jsou na GPU uložena data osvětlení
+\end{compactenum}
+\vspace{2mm}
+
+Velikost chunku nelze jednoduše měnit, protože je na ní založeno mnoho systémů, které na ní zakládají např. velikosti pracovních skupin shaderů, zarovnání souřadnic na bajty apod. Nicméně lze měnit výšku \textit{chunk regionu}: \textit{regiony} dělí vertikálně chunk na několik částí, každý region má vlastní buffery pro vykreslování a pro každý region je zvlášť počítán \textit{frustum culling}. Z implementačních důvodů je minimální výška regionu 8\,bloků a maximální 128\,bloků.
+
+Zvýšení velikosti regionu může znamenat:\nopagebreak
+\begin{compactenum}
+	\item Zvýšení počtu vykreslovaných trojúhelníků, protože probíhá hrubší \textit{frustum culling}. Rozdíl bude méně patrný při větších dohledových vzdálenostech, kde je většina chunků stejně v pohledovém jehlanu celá.
+	\item Méně \textit{draw calls}. Větší regiony znamená větší oblasti pokryté jedním \textit{draw call} a~uložené v jednom bufferu.
+	\item Menší režii CPU, protože seznam bufferů pro vykreslení sestavuje CPU.
+	\item Menší režii GPU. Pro každý region jsou samostatně sestavována vykreslovací data. Sestavování dat je taktéž akcelerováno na GPU a pro každé sestavování je spuštěn dedikovaný \textit{kernel}. Menší počet spuštění \textit{kernelů} může mít vliv zejména při načítání světa, kdy se sestavují data pro velké množství chunků. Řízení výkonu GPU je navíc implementováno omezením počtu procesů na pozadí, které mohou být zadány během jednoho snímku, takže zvětšením regionu se sníží počet procesů nutných k načtení chunku.
+	\item Pomalejší úpravy terénu. Při změně jednoho voxelu je třeba znovu sestavit vykreslovací data pro celý region. Sestavování jednoho regionu je ale příliš rychlé na to, aby tento efekt mohl být znát.
+\end{compactenum}
+
+Bylo provedeno měření závislosti snímkové frekvence a doby načítání na výšce regionu v referenčním prostředí 3: \nopagebreak
+\begin{tableFloat}[H]
+	\centering
+	\begin{tabular}{r c || c c c c c}
+		& & \multicolumn{5}{c}{\textbf{Výška regionu}} \\
+		\multicolumn{2}{c ||}{\textbf{Dohl. vzd.}} & \textbf{8} & \textbf{16} & \textbf{32} & \textbf{64} & \textbf{128} \\ \hline \hline
+		
+		\multirow{3}{*}{$V_{dist} = 8$} & $FPS$ & 79 & 79 & 79 & 79 & 79 \\
+		& $N_\triangle$ & 139 594 & 147 518 & 165 684 & 194 812 & 272 270 \\
+		& $T_{load}$ & 11 s & 8 s & 4 s & 3 s & 2,5 s \\ \hline
+		
+		\multirow{3}{*}{$V_{dist} = 16$} & $FPS$ & 59 & 60 & 55 & 61 & 59 \\
+		& $N_\triangle$ & 739 286 & 747 504 & 767 902 & 808 836 & 914 982 \\
+		& $T_{load}$ & 43 s & 28 s & 18 s & 10 s & 8 s \\ \hline
+		
+		\multirow{3}{*}{$V_{dist} = 32$} & $FPS$ & 40 & 44 & 41 & 41 & 44 \\
+		& $N_\triangle$ & 1 734 210 & 1 743 498 & 1 768 282 & 1 811 754 & 1 928 928 \\
+		& $T_{load}$ & 172 & 87 & 60 & 41 & 31 \\ \hline
+		
+		\multirow{3}{*}{$V_{dist} = 56$} & $FPS$ & 26 & & & 28 & 29 \\
+		& $N_\triangle$ & 4 163 242 & & & 4 261 558 & 4 407 838 \\
+		& $T_{load}$ & 893 & & & 125 & 115 \\ \hline
+	\end{tabular}
+	\caption{Výsledky měření závislosti výkonu na výšce \textit{chunk regionu} ve scéně 3}
+\end{tableFloat}
+
+\begin{figure}[H]
+	\begin{minipage}{0.49\textwidth}
+		\begin{tikzpicture}
+		\newcommand{\entry}[1]{%
+			\addplot table [x=regionHeight, y=relTri#1, col sep=semicolon, /pgf/number format/read comma as period] {csv-data/regionHeight.csv};%
+			\addlegendentry{$V_{dist} = #1$};%
+		}
+		\begin{axis}[width=\textwidth, xlabel={Výška regionu}, ylabel={Relativní $N_\triangle$ (\%)}, legend pos=north west, xtick=data]
+		\entry{8}
+		\entry{16}
+		\entry{32}
+		\entry{56}
+		\end{axis}
+		\end{tikzpicture}
+		\captionof{graphFloat}{Závislost $N_\triangle$ na výšce \textit{chunk regionu} ve scéně 3}
+	\end{minipage}
+	\hfill
+	\begin{minipage}{0.49\textwidth}
+		\begin{tikzpicture}
+		\newcommand{\entry}[1]{%
+			\addplot table [x=regionHeight, y=relLoad#1, col sep=semicolon, /pgf/number format/read comma as period] {csv-data/regionHeight.csv};%
+			\addlegendentry{$V_{dist} = #1$};%
+		}
+		\begin{axis}[width=\textwidth, xlabel={Výška regionu}, ylabel={Relativní $T_{load}$ (\%)}, legend pos=north east, xtick=data]
+		\entry{8}
+		\entry{16}
+		\entry{32}
+		\entry{56}
+		\end{axis}
+		\end{tikzpicture}
+		\captionof{graphFloat}{Závislost $T_{load}$ na výšce \textit{chunk regionu} ve scéně 3}
+	\end{minipage}
+\end{figure}
+
+Z měření vyplývá, že je výhodnější mít větší velikost regionu. Vliv velikosti regionu na snímkovou frekvenci je minimální, ale zvýšením velikosti regionu se drasticky snižuje doba načítání. Finální výška regionu byla tedy zvolena 64 bloků, protože při 128 blocích se doba načítání již příliš nezkrátí, ale zato drasticky stoupá počet vykreslovaných trojúhelníků při menších dohledových vzdálenostech, což by mohlo ovlivnit výkon na slabších počítačích. Výsledky naznačují, že by mohlo být výhodné mít dodatečné dělení regionů, kde by se vykreslovací data generovala najednou pro celý region, ale \textit{frustum culling} by se granuloval na subregiony.
+
+Další konstantou, která může být předmětem optimalizace, je velikost pracovních skupin shaderů. V \textit{postprocessingu} většina shaderů nevyužívá vláknové kooperace, proto by teoreticky jejich rychlost měla růst, dokud velikost pracovní skupiny neodpovídá velikosti \textit{warpu} (většinou 32/64 vláken) na grafické kartě, a pak by měla být víceméně stejná, případně klesat kvůli obtížnější koordinaci. Shadery s vláknovou kooperací by mohly větší pracovní skupiny využít, takže by stagnace mohla nastat až na vyšších rozměrech.
+
+\begin{tableFloat}
+	\centering
+	\begin{tabular}{r l || c | c | c | c | c}
+		& & \multicolumn{5}{c}{\textbf{Velikost pracovní skupiny}} \\
+		\multicolumn{2}{c ||}{\textbf{Scéna}} & 2×2 & 4×4 & 8×8 & 16×16 & 32×32 \\ \hline \hline
+		1 & Oceán & 17 & 42 & 56 & 55 & 53 \\
+		2 & Poušť & 20 & 42 & 55 & 55 & 52 \\
+		3 & Krajina & 17 & 36 & 45 & 45 & 43 \\
+		4 & Jeskyně & 18 & 49 & 66 & 67 & 60
+	\end{tabular}
+	\caption{Závislost snímkové frekvence na velikosti pracovní skupiny shaderů \textit{postprocessingu} (měří se pouze pro shadery bez vláknové kooperace)}
+\end{tableFloat}
+
+\begin{tableFloat}
+	\centering
+	\begin{tabular}{r l || c | c | c}
+		& & \multicolumn{3}{c}{\textbf{Velikost prac. sk.}} \\
+		\multicolumn{2}{c ||}{\textbf{Scéna}} & 8×8 & 16×16 & 32×32 \\ \hline \hline
+		1 & Oceán & 56 & 56 & 55 \\
+		2 & Poušť & 55 & 55 & 54 \\
+		3 & Krajina & 45 & 46 & 45 \\
+		4 & Jeskyně & 66 & 65 & 64
+	\end{tabular}
+	\caption{Závislost snímkové frekvence na velikosti pracovní skupiny \textit{blur} shaderů (s~vláknovou kooperací)}
+\end{tableFloat}
+
+Měření potvrzují teorii ohledně shaderů bez vláknové kooperace. Aplikace nevykazuje žádné zrychlení ani u větších velikostí pracovní skupiny u shaderů rozostření. Pakliže nějaké zrychlení je, není nijak patrné na celkovém výkonu aplikace. Proto byla zvolena velikost pracovní skupiny u všech shaderů jako 8×8.
+
+Aplikace obsahuje i další shadery, nicméně u těch je velikost pracovní skupiny limitována dalšími okolnostmi:
+\begin{enumerate}
+	\item Při výpočtech osvětlení je velikost pracovní skupiny nastavena na maximální možnou hodnotu 8×8×8; menší velikost skupiny by výpočty dělila do menších diskrétních oblastí a tím pádem by muselo být spuštěno více kernelů, aby se světlo mohlo propagovat do maximální vzdálenosti.
+	\item Sestavování vykreslovacích dat taktéž využívá maximální přípustnou velikost pracovní skupiny, protože velikost pracovní skupiny limituje maximální míru agregace stěn, která je prováděna v rámci vláknové kooperace.
+	\item Procedurální generování světa taktéž využívá vláknovou kooperaci do velké míry. Zde by mohlo být měření velikosti pracovní skupiny smysluplné, ale je vynecháno z časových důvodů.
+\end{enumerate}
+
+Poslední konstantou zkoumanou v tomto oddíle je velikost 3D textur pro ukládání osvětlovacích dat na GPU. Velikost textur může mít vliv na využití VRAM (protože alokovaná paměť se zaokrouhluje na objem textury) a na snímkovou frekvenci, kde se při \textit{shadingu} v \textit{postprocessingu} musí shaderu předávat pole \textit{bindless} textur (menší velikost regionu = více textur k předání) a může docházet k masivnější serializaci při divergenci vláken, kdy vlákna v jedné pracovní skupině přistupují do více textur. Na GPU jsou v textuře (\inlineDCode{ActiveArea}) ukládány také \textit{block IDs}, ty ale nejsou předávány jako \textit{bindless} textury a má je smysl sdružovat jen pro 2×2 chunky, díky čemuž lze oblast 3×3 chunků (což se používá pro výpočty osvětlení) připojit k shaderu pomocí pouze 4 textur. Textur musí být dostatečně malý počet, aby se jejich \textit{handles} vešly do konstantní paměti shaderů.
+
+\begin{tableFloat}
+	\centering
+	\begin{tabular}{r l c || c c c c c}
+		& & & \multicolumn{5}{c}{\textbf{Velikost \textit{light map} textur (v chuncích)}} \\
+		\multicolumn{3}{c ||}{\textbf{Scéna}} & 2×2 & 4×4 & 8×8 & 16×16 & 32×32 \\ \hline \hline
+		\multirow{2}{*}{1} & \multirow{2}{*}{Oceán} & VRAM & 1\,931 MB & 1\,967 MB & 2\,043 MB & 2\,219 MB & 2665 MB \\
+		& & $FPS$ & 51 & 56 & 57 & 57 & 57 \\ \hline
+		\multirow{2}{*}{2} & \multirow{2}{*}{Poušť} & VRAM & 1\,931 MB & 1\,965 MB & 2\,041 MB & 2\,217 MB & 2667 MB \\
+		& & $FPS$ & 52 & 54 & 55 & 56 & 56 \\ \hline
+		\multirow{2}{*}{3} & \multirow{2}{*}{Krajina} & VRAM & 1\,931 MB & 1\,967 MB & 2\,043 MB & 2\,219 MB & 2\,665 MB \\
+		& & $FPS$ & 41 & 45 & 46 & 45 & 45 \\ \hline
+		\multirow{2}{*}{4} & \multirow{2}{*}{Jeskyně} & VRAM & 1\,931 MB & 1\,967 MB & 2\,043 MB & 2\,217 MB & 2\,667 MB \\
+		& & $FPS$ & 60 & 65 & 65 & 67 & 60
+	\end{tabular}
+	\caption{Závislost FPS a využití VRAM paměti na velikosti 3D textury s osvětlovacími daty}
+\end{tableFloat}
+
+Z dat je patrné, že snímková frekvence neroste od velikosti textury 8×8. Protože ale dále rostou nároky na grafickou paměť, byla zvolena tato velikost (8×8 chunků = 128×128×256 voxelů).
+
+\subsection{Spotřeba RAM a VRAM}
+Nároky na RAM a VRAM by měly přibližně odpovídat 4\,B na jeden blok, tedy 0,262 MB na chunk.
+
+\begin{graphFloat}[H]
+	\begin{tikzpicture}
+	\begin{axis}[
+		no markers, width=\textwidth, height=5cm, xmin=0,
+		xlabel={Aktivních chunků}, ylabel={Paměť (GB)},
+		legend pos=north west, clip=false,
+		extra x ticks={289, 1089, 2401, 4226, 9409, 12768},
+		extra x tick style={grid=major, ticklabel pos=top},
+		extra x tick labels={8, 16, 24, 32, 48, 56},
+		title={$V_{dist}$}
+		]
+	
+	\addplot table [x=activeChunks, y expr=\thisrow{ram}/1000, col sep=semicolon, line legend, /pgf/number format/read comma as period] {csv-data/ramUsage.csv};
+	\addlegendentry{RAM};
+	
+	\addplot table [x=activeChunks, y expr=\thisrow{vram}/1000, col sep=semicolon, line legend, /pgf/number format/read comma as period] {csv-data/ramUsage.csv};
+	\addlegendentry{VRAM};
+	
+	\end{axis}
+	\end{tikzpicture}
+	\caption{Závislost spotřeby paměti aplikace na počtu \textit{aktivních} chunků}
+\end{graphFloat}
+
+Spojnice trendu pro naměřené hodnoty RAM je $y = 0,3129x + 24,127$ a VRAM $y = 0,2586x + 853,24$. Spotřeba grafické paměti téměř přesně odpovídá očekávaným hodnotám s tím, že jsou poměrně vysoké počáteční nároky. Protože má referenční stroj k~dispozici 4\,GB grafické paměti, paměť přesahující tuto hranici se sdílí s procesorem, což už v měření není reflektováno. Operační paměť potom vykazuje mírně zvýšené nároky na režii voxelů, každý voxel tedy ve skutečnosti odpovídá přibližně 4,8 B operační paměti.
+
+\pagebreak
+\subsection{Agregace} \label{perf:aggregation}
+Byla provedena měření vlivu volby agregační metody na snímkovou frekvenci a počet vykreslovaných trojúhelníků:
+
+\begin{tableFloat}[H]
+	\resizebox{\textwidth}{!}{
+		\def\arraystretch{1.1}
+		\begin{tabular}{r l c || r r  r r  r r  r r}
+			\multicolumn{3}{c ||}{\textbf{Scéna}} & \multicolumn{2}{c}{\textbf{Bez agregace}} & \multicolumn{2}{c}{\textbf{Lines}} & \multicolumn{2}{c}{\textbf{Squares}} & \multicolumn{2}{c}{\textbf{Squares ext}} \\ \hline \hline
+			\csvreader[head to column names, separator=semicolon]{csv-data/aggregation.csv}{}{
+				\multirow{4}{*}{\thecsvrow} & \multirow{4}{*}{\scene} & $N_\triangle^O$
+				& \num{\nOk}\,k & {\small (100\,\%) }
+				& \num{\lnOk}\,k & {\small (\lnOrel\,\%) }
+				& \num{\sqOk}\,k & {\small (\sqOrel\,\%) }
+				& \num{\sqeOk}\,k & {\small (\sqeOrel\,\%) } \\
+				& & $N_\triangle^T$
+				& \num{\nTk}\,k & {\small (100\,\%) }
+				& \num{\lnTk}\,k & {\small (\lnTrel\,\%) }
+				& \num{\sqTk}\,k & {\small (\sqTrel\,\%) }
+				& \num{\sqeTk}\,k & {\small (\sqeTrel\,\%) } \\
+				& & $N_\triangle^S$
+				& \num{\nSk}\,k & {\small (100\,\%) }
+				& \num{\lnSk}\,k & {\small (\lnSrel\,\%) }
+				& \num{\sqSk}\,k & {\small (\sqSrel\,\%) }
+				& \num{\sqeSk}\,k & {\small (\sqeSrel\,\%) } \\
+				& & $FPS$ & \multicolumn{2}{c}{\nFPS} & \multicolumn{2}{c}{\lnFPS} & \multicolumn{2}{c}{\sqFPS} & \multicolumn{2}{c}{\sqeFPS} \\
+				\if\thecsvrow4
+				\else
+				\hline
+				\fi
+			}
+		\end{tabular}
+	}
+	\caption{Závislost snímkové frekvence a $N_\triangle^+$ na metodě agregace}
+\end{tableFloat}
+
+Data ukazují, že agregace je velmi účinnou optimalizační technikou, která dokáže značně zvýšit rychlost hry. Nejefektivnější z testovaných metod je \inlineDCode{Squares ext}, která dokáže omezit počet vykreslovaných trojúhelníků až o 70\,\% u neprůhledných bloků a až o 98\,\% u průhledných bloků. Drastické snížení počtu vykreslovaných průhledných bloků ve scéně Oceán je způsobeno tím, že scéna obsahuje převážně jednolitou mořskou hladinu, která jde snadno agregovat až na maximální oblasti 8×8. Tato agregace je o to úspornější, že průhledné bloky se vykreslují až třikrát kvůli \textit{depth peelingu}.
+
+\subsection{Načítání a generování chunků, dynamické chování aplikace}
+Byla provedena měření chování aplikace při statické a pohyblivé kameře. Aplikace byla spuštěna, počkalo se, až se načte terén, poté byl proveden dvacetivteřinový pohyb kamery vpřed, načež se opět počkalo na načtení terénu. Tento test byl proveden dvakrát, jednou na již vygenerovaném terénu, kde se data načítala z disku, podruhé na nevygenerovaném terénu, kde se svět procedurálně generoval na GPU (pomocí přepínače \verb|--recreate|). Pro objem dat nutných k vizualizaci byl test omezen pouze na scénu 3 a dohledovou vzdálenost 32.
+
+\newcommand{\perfGraphEntry}[4]{
+	\addplot[#4] table [x=time, y=#1, col sep=semicolon, line legend, /pgf/number format/read comma as period] {csv-data/#3.csv};
+	\def\temp{#2}\ifx\temp\empty\else
+	\addlegendentry{#2};
+	\fi
+}
+\newcommand{\perfGraph}[2]{
+	\begin{graphFloat}[H]
+		\begin{tikzpicture}
+		\begin{groupplot}[
+		group style={
+			group size=1 by 3,
+			vertical sep=10mm,
+			xlabels at=edge bottom,
+		},
+		no markers,
+		width=\textwidth, height=6cm, xmin=0, xlabel={Čas (s)}
+		]
+		
+		\nextgroupplot
+		
+		\perfGraphEntry{gcCollect, y expr=sign(\thisrow{gcCollect})*100}{Garbage collector}{#1}{purple!40, const plot}
+		
+		\perfGraphEntry{fps}{$FPS$}{#1}{blue}
+		\perfGraphEntry{minFps}{}{#1}{draw=none, name path=min}
+		\perfGraphEntry{maxFps}{}{#1}{draw=none, name path=max}		
+		
+		\addplot[blue!20] fill between[of=min and max];
+		
+		\nextgroupplot[ylabel={Událostí za vteřinu}, legend style={legend pos=north east, legend columns=2}]
+		\perfGraphEntry{staticRenderRegion2}{Sestavování vykreslovacích dat}{#1}{red}
+		\perfGraphEntry{lightMapUpdate}{Výpočty osvětlení}{#1}{black}
+		\perfGraphEntry{gpuBlockIDMapUpdate}{Kopírování \textit{block IDs} na GPU}{#1}{blue}
+		
+		\ifthenelse{\equal{#1}{dynamicGenerating}}{
+			\perfGraphEntry{generateChunk}{Generování chunků}{#1}{green}
+		}{
+			\perfGraphEntry{chunkLoad}{Načítání chunků}{#1}{green}
+		}
+		
+		\nextgroupplot[ylabel={Alokovaná paměť (GB)}, legend style={legend pos=south east}]
+		
+		\perfGraphEntry{gcCollect, y expr=sign(\thisrow{gcCollect})*3}{Garbage collector}{#1}{purple!40, const plot}
+		
+		\perfGraphEntry{ram, y expr=\thisrow{ram}/1000}{RAM}{#1}{red}
+		\perfGraphEntry{vram, y expr=\thisrow{vram}/1000}{VRAM}{#1}{blue}
+		\perfGraphEntry{activeChunks, y expr=\thisrow{activeChunks}/2000}{Aktivních chunků}{#1}{green}
+		
+		\end{groupplot}
+		\end{tikzpicture}
+		\caption{#2}
+	\end{graphFloat}
+}
+
+\perfGraph{dynamicPregenerated}{Dynamické chování aplikace ve scéně 3: nejprve se čeká na načtení terénu, poté se kamera pohybuje 20\,s vpřed (\inlineDCode{fast noclip}), poté se opět čeká na načtení. Terén je již předvygenerovaný a uložený v SQLite souboru.}
+\perfGraph{dynamicGenerating}{Dynamické chování aplikace ve scéně 3: nejprve se čeká na vygenerování terénu, poté se kamera pohybuje 20\,s vpřed (\inlineDCode{Fast noclip}), poté se opět čeká na vygenerování. Terén není přednačtený a přímo se generuje na GPU.}
+
+\noindent Z měření lze odvodit následující:
+\begin{enumerate}
+	\item \textit{Garbage collector} (GC) v jazyce D způsobuje znatelné záseky aplikace (až okolo 600\,ms). Ještě před tímto měřením byla provedena snaha o minimalizaci využití GC, další omezování by však vyžadovalo nahrazení funkčnosti standardní knihovny (kontejnery, zlib, ...) vlastní implementací, což by bylo velice pracné.
+	
+	\textit{Krátce před odevzdáním této práce byly pole s \textit{block IDs} a \textit{block small data} přesunuty mimo paměť spravovanou \textit{garbage collectorem} (nově jsou alokovány přes \inlineDCode{malloc}), což omezilo doby běhu \textit{garbage collectoru} ze stovek milisekund na jednotky. Pro nedostatek času už nebyla provedena opravná měření.}
+	\item Při načítání chunků z disku si aplikace drží stabilní snímkovou frekvenci bez výraznějšího kolísání (až na běhy GC). Systém distribuce práce na pozadí, který je v aplikaci implementován, funguje.
+	\item Procedurální generování chunků je výrazně pomalejší (cca 2,5×) než načítání chunků z~ disku. Během procedurálního generování má aplikace nižší snímkovou frekvenci, která je navíc nestabilní. Tento jev se dá vysvětlit tím, že procedurální generování probíhá na vlákně a v odděleném OpenGL kontextu, kde dynamické omezování výkonu není implementováno. Jedinou formou omezení výkonu generování světa je fixní prodleva 1\,ms mezi generováním jednotlivých chunků. V rámci dalších optimalizací by bylo vhodné se zaměřit právě na subsystém procedurálního generování.
+	\item Načítání světa z paměti je (pro $V_{dist} = 32$) dostatečně rychlé na to, aby aplikace stíhala načítat svět s pohybem kamery (měřeno při \inlineDCode{fast noclip}, což je nejvyšší nastavitelná rychlost v aplikaci). Toto lze vidět ve spodním grafu, kde počet aktivních chunků nejprve přibude, než se začnou odkládat chunky mimo zorné pole (kterým vyprší časovač aktivity, protože nebyl obnovován). Rychlost procedurálního generování chunků není pro tuto situaci dostatečná.
+\end{enumerate}
+
+\subsection{\textit{Postprocessing}}
+Na závěr provedeme měření vlivu jednotlivých \textit{postprocessing} efektů na výkon hry. Prvním zkoumaným efektem bude osvětlení. Ačkoli je osvětlení počítáno ve \textit{screen space}, lze očekávat jisté zpomalení s přibývající dohledovou vzdáleností, protože neprůhledných pixelů bude pravděpodobně více a souřadnice pixelů ve světě budou dále od sebe, takže bude snížena lokalita přístupu do paměti. Úzké hrdlo efektu bude pravděpodobně přístup k texturám, takže není očekáván větší rozdíl ve výkonu mezi \textit{per sample} a \textit{per pixel} \textit{shadingem}. Pro větší zřetelnost případného rozdílu budeme ale provádět měření při 4× MSAA oproti výchozím 2×.
+
+\begin{tableFloat}[H]
+	\centering
+	\begin{tabular}{r l l || c c c c c}
+		&&& \multicolumn{4}{c}{$V_{dist}$} \\
+		\multicolumn{2}{c}{\textbf{Scéna}} & \textbf{\textit{Shading}} & 4 & 8 & 16 & 32 \\ \hline \hline
+		\multirow{3}{*}{1} & \multirow{3}{*}{Oceán} & \textit{off} & 82 & 77 & 71 & 57 \\
+		&& \textit{per pixel} & 77 & 71 & 65 & 52 \\
+		&& \textit{per sample} & 60 & 53 & 49 & 41 \\ \hline
+		
+		\multirow{3}{*}{2} & \multirow{3}{*}{Poušť} & \textit{off} & 88 & 83 & 73 & 51 \\
+		&& \textit{per pixel} & 82 & 77 & 68 & 52 \\
+		&& \textit{per sample} & 66 & 60 & 55 & 44 \\ \hline
+		
+		\multirow{3}{*}{3} & \multirow{3}{*}{Krajina} & \textit{off} & 81 & 73 & 55 & 42 \\
+		&& \textit{per pixel} & 79 & 68 & 52 & 40 \\
+		&& \textit{per sample} & 69 & 57 & 43 & 34 \\ \hline
+		
+		\multirow{3}{*}{4} & \multirow{3}{*}{Jeskyně} & \textit{off} & 72 & 68 & 68 & 62 \\
+		&& \textit{per pixel} & 60 & 59 & 58 & 55 \\
+		&& \textit{per sample} & 45 & 44 & 44 & 42 \\ \hline
+	\end{tabular}
+	\caption{Závislost snímkové frekvence na dohledové vzdálenosti a metodě \textit{shadingu} při 4× MSAA}
+\end{tableFloat}
+
+Měření zcela neodpovídají očekáváním, značný pokles snímkové frekvence je i při změně z \textit{per pixel shading} na \textit{per sample shading}. Na výkon má tedy znatelný vliv i samotné zpracování dát.
+
+Dalším efektem je \textit{shadow mapping}. Ten by zdánlivě měl být málo závislý na dohledové vzdálenosti, protože se vždy vykresluje oblast před kamerou s fixním poloměrem. Počet vykreslovaných trojúhelníků se nicméně mění v závislosti na denní době: když je slunce nejvýše na obloze, takže jsou paprsky vrhány kolmo dolů na oblast kolem kamery, když je slunce na horizontu, musí být vykresleny všechny chunky ve směru ke slunci. V noci \textit{shadow mapy} využívá měsíc, který putuje po stejné dráze, jako slunce, pouze rychleji a v opačném směru.
+
+\begin{tableFloat}[H]
+	\centering
+	\def\arraystretch{1.1}
+	\begin{tabular}{l || c c c c}
+		$V_{dist}$: & 4 & 8 & 16 & 32 \\ \hline \hline
+		$N_\triangle^S$ v poledne: & 39\,k & 50\,k & 50\,k & 50\,k \\
+		$N_\triangle^S$ při svítání: & 35\,k & 70\,k & 221\,k & 262\,k
+	\end{tabular}
+	\caption{Závislost počtu trojúhelníků vykreslovaných do \textit{shadow mapy} na dohledové vzdálenosti ve scéně 3}
+\end{tableFloat}
+
+\begin{graphFloat}[H]
+	\centering
+	\begin{tikzpicture}
+	\begin{axis}[
+		width=\textwidth-1cm, height=4cm, xmin=0, xmax=1,
+		extra x ticks={0.2, 0.5, 0.8, 1},
+		extra x tick style={grid=major, ticklabel pos=top},
+		extra x tick labels={svítání, poledne, západ slunce, půlnoc},
+		ylabel={Trojúhelníků}, xlabel={Denní doba}
+	]
+		\addplot coordinates {
+			(0,44000) (0.1,134000) (0.2,205000) (0.3,91000) (0.4,57000) (0.5,44000) (0.6,77000) (0.7,158000) (0.8,321000) (0.9,279000) (1,44000)
+		};
+	\end{axis}
+	\end{tikzpicture}
+	\caption{Závislost počtu trojúhelníků vykreslovaných do \textit{shadow mapy} na denní době ve scéně 3}
+\end{graphFloat}
+
+Výkon \textit{shadow mappingu} je pak ovlivněn velikostí \textit{shadow mapy} a rozlišením obrazovky, resp. \textit{multisamplingem}.
+
+\begin{tableFloat}[H]
+	\centering
+	\def\arraystretch{1.1}
+	\begin{tabular}{r || r r r r}
+		& \multicolumn{4}{c}{\textbf{\textit{Shadow mapping}}} \\
+		\textit{\textbf{MSAA}} & \textit{off} & $1024^2$ & $2048^2$ & $4096^2$ \\ \hline \hline
+		1× & 54 & 49 & 39 & 24 \\
+		2× & 47 & 41 & 35 & 22 \\
+		4× & 35 & 32 & 28 & 20 \\
+		8× & 23 & 21 & 19 & 15 \\
+	\end{tabular}
+	\caption{Závislost snímkové frekvence na \textit{MSAA} a rozměrech \textit{shadow mapy} ve scéně 3 při svítání}
+	\label{table:MSAAShadowMapFPS}
+\end{tableFloat}
+
+Ve výsledcích není nic neočekávaného. Měřením v tabulce \ref{table:MSAAShadowMapFPS} jsme současně zhodnotili i náročnost \textit{multisamplingu}, která znatelně stoupá s počtem vzorků.
+
+Posledním efektem, který budeme detailněji měřit, je \textit{depth peeling}. \nopagebreak
+\begin{tableFloat}[H]
+	\centering
+	\def\arraystretch{1.1}
+	\begin{tabular}{r l l || r r r r}
+		&&& \multicolumn{4}{c}{\textbf{Vrstev \textit{depth peelingu}}} \\
+		\multicolumn{2}{c}{\textbf{Scéna}} & & 0 & 1 & 2 & 3 \\ \hline \hline
+		\multirow{2}{*}{1} & \multirow{2}{*}{Oceán} & FPS & 81 & 64 & 61 & 57 \\
+		&& $N_\triangle$ & 506\,k & 515\,k & 525\,k & 534\,k \\ \hline
+		
+		\multirow{2}{*}{2} & \multirow{2}{*}{Poušť} & FPS & 68 & 61 & 59 & 56 \\
+		&& $N_\triangle$ & 1 163\,k & 1 163\,k & 1 163\,k & 1 163\,k \\ \hline
+		
+		\multirow{2}{*}{3} & \multirow{2}{*}{Krajina} & FPS & 54 & 50 & 47 & 45 \\
+		&& $N_\triangle$ & 1 811\,k & 1 811\,k & 1 811\,k & 1 812\,k \\ \hline
+		
+		\multirow{2}{*}{4} & \multirow{2}{*}{Jeskyně} & FPS & 100 & 86 & 80 & 75 \\
+		&& $N_\triangle$ & 102\,k & 102\,k & 102\,k & 102\,k
+	\end{tabular}
+	\caption{Závislost snímkové frekvence a $N_\triangle$ na počtu vrstev \textit{depth peelingu}}
+\end{tableFloat}
+
+Z výsledků je patrné, že \textit{depth peeling} zpomaluje aplikaci, i když se nevykreslují žádné průhledné bloky. Snaha o redukci tohoto jevu však už není součástí této práce.
+
+Na závěr uvedeme už jen stručné měření vlivu ostatních \textit{postprocessing} efektů oproti výchozímu nastavení:
+
+\begin{tableFloat}[H]
+	\centering
+	\def\arraystretch{1.1}
+	\begin{tabular}{l || c | c | c | c}
+		& Oceán & Poušť & Krajina & Jeskyně \\ \hline \hline
+		\textbf{Výchozí nastavení} & 57 & 56 & 41 & 59 \\ \hline
+		\textit{Depth of field off} & 66 & 65 & 46 & 71 \\
+		\textit{God rays off} & 59 & 56 & 42 & 59 \\
+		Lepší texturování \textit{off} & 57 & 56 & 41 & 59 \\
+		\textit{MSAA alpha test off} & 57 & 56 & 41 & 59 \\
+		\textit{T-junction hiding off} & 57 & 56 & 41 & 59 \\
+		Animace bloků \textit{off} & 57 & 56 & 41 & 59
+	\end{tabular}
+	\caption{Vliv jednotlivých \textit{postprocessing} efektů na snímkovou frekvenci ($V_{dist} = 32$).}
+\end{tableFloat}
+
+\chapter{Závěr}
+V rámci této práce byly prozkoumány metody procedurálního generování, reprezentace a~vykreslování volumetrického terénu. Byla vytvořena demonstrační aplikace implementující vybrané techniky. Aplikace provádí uměleckou vizualizaci nekonečného procedurálně generovaného volumetrického terénu, umožňuje jeho editaci a uchovávání na disku. Ze zajímavých implementačních prvků aplikace lze zmínit akceleraci procedurálního generování, \textit{frustum cullingu}, přípravy vykreslovacích dat a výpočtů osvětlení na GPU, systém agregace stěn voxelů do jednoho primitiva (taktéž akcelerovaný na GPU) nebo osvětlovací model, který má konstantní složitost v závislosti na počtu světel a jehož přirozeným důsledkem je \textit{ambient occlusion} ve vnitřních rozích (ten vychází z návrhu ve hře Minecraft, taktéž akcelerovaný na GPU). Za pozitivní lze také považovat celkový vizuální dojem.
+
+Aplikace je vhodná pro rozšíření na plnohodnotnou hru. V rámci dalších experimentů by mohlo být přínosné implementovat \textit{ray casting} (pro ty bloky, které mají tvar krychle); jelikož se data o blocích již ukládají na GPU, triviální implementace by nebyla příliš obtížná. Dále je relevantní průzkum alternativních způsobů šíření světla, protože aktuální implementace umožňuje šíření světla "za roh" a produkuje kosočtvercový vzor zřetelný při pohledu shora. Existuje prostor pro hledání optimálnější metody agregace stěn a optimalizaci generování terénu. A v neposlední řadě by pro uplatnění aplikace jako hry bylo žádoucí vyřešit občasné několikasetmilisekundové záseky způsobené během \textit{garbage collectoru}.
+
+Byla provedena měření dokumentující využité prostředky a výkon aplikace. V přiloženém CD je kromě zdrojových kódů k dispozici i prezentační video aplikace, které bylo zhotoveno v souladu se zadáním.

@@ -1,0 +1,83 @@
+% !TeX root = diplomka.tex
+
+\usepackage{scalefnt}
+\usepackage{needspace}
+
+% References
+\newcommand{\putImage}[3][]{
+	\begin{figure}[H]
+		\centering
+		\includegraphics[#3]{obrazky-figures/#2}
+		\caption{#1}
+	\end{figure}
+}
+
+\definecolor{darkgreen}{cmyk}{1,0,1,0.3}
+\definecolor{darkergreen}{cmyk}{1,0,1,0.6}
+
+\definecolor{darkred}{cmyk}{0,1,1,0.3}
+
+\definecolor{darkbrown}{cmyk}{0,0.337,0.673,0.604}
+\definecolor{darkerbrown}{cmyk}{0,0.33,0.67,0.83}
+
+\definecolor{darkblue}{cmyk}{1,0,0,0.3}
+\definecolor{darkerblue}{cmyk}{1,0,0,0.6}
+
+\definecolor{darkyellow}{cmyk}{0,0,1,0.2}
+\definecolor{darkeryellow}{cmyk}{0,0,1,0.4}
+
+% Args: X, Y, Z, color
+\newcommand{\drawcube}[4]
+{
+	% Bottom
+	\draw[fill=darker#4] (#1,#2,#3) -- (#1+1,#2,#3) -- (#1+1,#2,#3+1) -- (#1,#2,#3+1) -- cycle;
+	
+	% Front & back
+	%\draw[] (#1,#2,#3) -- (#1+1,#2,#3) -- (#1+1,#2+1,#3) -- (#1,#2+1,#3) -- cycle;
+	\draw[fill=dark#4] (#1,#2,#3) -- (#1+1,#2,#3) -- (#1+1,#2+1,#3) -- (#1,#2+1,#3) -- cycle;
+	\draw[fill=dark#4] (#1,#2,#3+1) -- (#1+1,#2,#3+1) -- (#1+1,#2+1,#3+1) -- (#1,#2+1,#3+1) -- cycle;
+	
+	% Left & right
+	%\draw[] (#1,#2,#3) -- (#1,#2,#3+1) -- (#1,#2+1,#3+1) -- (#1,#2+1,#3) -- cycle;
+	\draw[fill=darker#4] (#1,#2,#3) -- (#1,#2,#3+1) -- (#1,#2+1,#3+1) -- (#1,#2+1,#3) -- cycle;
+	\draw[fill=darker#4] (#1+1,#2,#3) -- (#1+1,#2,#3+1) -- (#1+1,#2+1,#3+1) -- (#1+1,#2+1,#3) -- cycle;
+	
+	% Top & bottom
+	\draw[fill=darker#4] (#1,#2+1,#3) -- (#1+1,#2+1,#3) -- (#1+1,#2+1,#3+1) -- (#1,#2+1,#3+1) -- cycle;
+}
+
+\lstdefinelanguage{d}
+{
+	morekeywords={catch, const, immutable, struct, class, alias, for, foreach, static, if, debug, release, template, mixin, module, import, while, is, in, scope, switch, this, throw, try, with, else, do, finally, function, delegate, asm, int, uint, short, ushort, long, ulong, byte, ubyte, string, interface, public, private, override, void, new, delete, cast},
+	sensitive=true,
+	morecomment=[l]{//},
+	morecomment=[s]{/*}{*/},
+	morestring=[b]",
+}
+
+\lstset{% 
+	language=d,
+	basicstyle=\ttfamily\small, 
+	breaklines=true,
+	breakatwhitespace=true,
+	breakautoindent=true,
+	breakindent=5mm,
+	escapeinside=$$,
+	numbers=left,
+	numberstyle=\small\ttfamily,
+	numbersep=3mm,
+	tabsize=2,
+	frame=leftline,
+	framesep=2mm,
+	xleftmargin=8mm,
+	extendedchars=true
+} 
+
+\lstnewenvironment{dcode}{}{} 
+
+\newcommand{\inlineDCode}[1]{\lstinline[%
+	language=d,
+	keepspaces,
+	breakatwhitespace=true,
+	breaklines=true
+	]{#1}}

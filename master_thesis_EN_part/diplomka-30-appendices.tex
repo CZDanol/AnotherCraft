@@ -1,0 +1,37 @@
+\chapter{Obsah přiloženého CD}
+\def\arraystretch{1.5}
+\begin{tabular}{l L{10cm}}
+	\textbf{Soubor/složka} & \textbf{Popis} \\ \hline
+	\inlineDCode{ac/} & Složka se zdrojovými soubory aplikace \\
+	\inlineDCode{bin_X/} & Předkompilované binární soubory aplikace pro platformu \inlineDCode{X} \\
+	\inlineDCode{res/} & Dodatečné zdroje využívané aplikací: fonty, textury a zdrojové soubory \textit{shaderů} \\
+	\inlineDCode{lib_X/} & Předkompilované knihovny pro platformu \inlineDCode{X} \\
+	\inlineDCode{README.md} & Soubor README s instrukcemi k sestavení aplikace \\
+	\inlineDCode{video.mp4} & Prezentační video aplikace \\
+	\inlineDCode{referenceScenes.sqlite} & Soubor světa s referenčními scénami použitými při měření výkonu (třeba zkopírovat na disk do složky \inlineDCode{save}, která bude na stejné úrovni se složkou \inlineDCode{bin}) \\
+	\inlineDCode{diplomka.pdf} & Dokument diplomové práce ve formátu pdf \\
+	\inlineDCode{master_thesis_CZ/} & Složka se zdrojovými soubory textu diplomové práce \\
+\end{tabular}
+
+\section{Významné zdrojové soubory}
+\begin{tabular}{l L{6cm}}
+	\textbf{Cesta} & \textbf{Popis} \\ \hline
+	\inlineDCode{res/shader/frustumCulling.cs.glsl} & Shader pro výpočet \textit{frustum cullingu} \\
+	\inlineDCode{res/shader/lighting/lightPropagation.cs.glsl} & Shader pro propagaci světla \\
+	\inlineDCode{res/shader/postprocessing/shading.cs.glsl} & Shader pro \textit{shading} a \textit{shadow mapping} \\
+	\inlineDCode{ac/client/world/chunkrenderer.d} & Třída spravující výpočet osvětlení chunku \\
+	\inlineDCode{ac/common/world/world.d} & Třída reprezentující svět \\
+	\inlineDCode{ac/common/world/chunk.d} & Třída reprezentující chunk \\
+	\inlineDCode{ac/common/block/block.d} & Třída reprezentující typ voxelu \\
+	\inlineDCode{ac/content/block/*} & Zdrojové kódy definující jednotlivé typy voxelů \\
+	\inlineDCode{ac/content/worldgen/overworld.d} & Třída definující výchozí generátor světa \\
+	\inlineDCode{res/shader/worldgen/*} & Shadery pro generování světa (GPU implementace Perlinova šumu, Voroného diagramů) \\
+	\inlineDCode{ac/content/world/env/overworld.d} & Třída definující výchozí \textit{skybox} \\
+	\inlineDCode{res/shader/postprocessing/sky.cs.glsl} & Shader pro výpočet \textit{skyboxu} \\
+	\inlineDCode{res/shader/render/blockRender.*.glsl} & Shadery pro vykreslování bloků \\
+	\inlineDCode{res/shader/render/blockRenderList.cs.glsl} & Shader akcelerující sestavování vykreslovacích dat a agregující stěny \\
+	\inlineDCode{res/shader/render/aggregation_*.cs.glsl} & Shadery pro různé metody agregace \\
+	\inlineDCode{ac/client/game/gamerenderer.d} & Třída spravující vykreslování světa \\
+	\inlineDCode{ac/client/block/blockface.d} & Třída reprezentující \textit{block face} a~jeho konfiguraci \\
+
+\end{tabular}

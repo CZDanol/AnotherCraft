@@ -1,0 +1,9 @@
+master_thesis_*/*.aux
+master_thesis_*/*.bbl
+master_thesis_*/*.log
+master_thesis_*/*.blg
+master_thesis_*/*.out
+master_thesis_*/*.synctex.gz
+master_thesis_*/*.toc
+master_thesis_*/diplomka.ptc
+master_thesis_*/diplomka.pdf
