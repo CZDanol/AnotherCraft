@@ -1073,32 +1073,34 @@ Because not all block types have the faces aligned with the voxel grid (for exam
 
 Memory requirements per vertex are then 3×1 + 2×1 + 1 = 6 bytes with 8b coordinates and 3×4 + 2×1 + 1 = 15 bytes with 32b floating point coordinates. In a testing scene containing 24 million 6B vertices and 100 thousand 15B vertices, the vertex data consume 145 MB of VRAM. If all the coordinates were stored in the 32b floating point format, the memory requirements would be 360 MB. Those are not large numbers for modern GPUS, however the buffers are not the only memory-demanding resources used by the application. Additionally, having smaller data decreases the memory bandwidth requirements, that is the most common bottleneck in GPU rendering.
 
-\subsection{Sestavování dat pro vykreslování} \label{buildDrawData}
-Základem vykreslování je projít všechny bloky v regionu a nad každým blokem zavolat funkci \inlineDCode{b_staticRender(context, renderer)}, která zajistí vložení dat reprezentujících příslušné \textit{faces} do příslušných \textit{bufferů}. Tento přístup je dále optimalizován:
+\subsection{The compilation of data for rendering} \label{buildDrawData}
+The basis of rendering is to go through all the blocks in the region and call a function for each block \inlineDCode{b_staticRender(context, renderer)}, which ensures the insertion of data representing the relevant \textit{faces} to the relevant \textit{buffers}. This approach is further optimized:
 
 \begin{enumerate}
-	\item Sousedící stěny krychlových bloků, které jsou těsně vedle sebe, nelze vidět, tedy se ani nemusí vykreslovat. Vynechání těchto stěn přináší extrémní zrychlení, protože namísto všech bloků lze vykreslovat pouze tenkou "skořápku" povrchu terénu. Počet vykreslovaných primitiv takto klesne o několik řádů.
-	\putImage[Pohled "zevnitř" terénu; aplikace vykresluje pouze stěny, které jsou viditelné z volného prostoru]{neighbourFacesOptimization.\imagesExtension}{width=0.9\textwidth}
+	\item Adjacent walls of cubic blocks, which are right next to each other, cannot be seen, so they do not even have to be drawn. The omission of these walls brings extreme acceleration, because instead of all the blocks, only a thin "shell" of the terrain surface can be drawn. The number of plotted primitives thus decreases by several orders of magnitude.
+	\putImage[View "from inside" the terrain; the application draws only walls that are visible from free space]{neighbourFacesOptimization.\imagesExtension}{width=0.9\textwidth}
 	
-	\item Sousedící stěny stejného typu, které jsou v jedné rovině, lze agregovat do jednoho vykreslovacího primitiva.
+	\item Adjacent walls of the same type that are in one plane can be aggregated into a single rendering primitive.
 	
-	\item Iterování přes všechny bloky v chunku a volání funkce \inlineDCode{b_staticRender} pro každý z nich je pomalé. Pokud víme, že voxel je ze všech stran obklopen neprůhlednými krychlemi (nebo pokud jsou všechny jeho viditelné stěny agregovány, takže jejich vykreslení zajišťuje jiný blok), můžeme ho zcela přeskočit.
+	\item Iterating over all blocks in the chunk and calling the function \inlineDCode{b_staticRender} for each of them it is slow. If we know that the voxel is surrounded on all sides by opaque cubes (or if all its visible walls are aggregated, so that their rendering is ensured by another block), we can skip it completely.
 \end{enumerate}
 
-Při vykreslování chunku je třeba mít v paměti načteny také jeho sousední chunky (aby šly počítat optimalizace sousedících stěn i pro bloky na okraji chunku, dále také kvůli výpočtům osvětlení), proto se klasifikace chunků dále rozvádí na \textit{neaktivní} (nenačtené v~paměti), \textit{aktivní} (načtené v~paměti, ale nevykreslované) a \textit{viditelné}. Aby mohly proběhnout výpočty pro vykreslování, musí být chunk \textit{viditelný} a jeho sousedi v 8-okolí musí být \textit{aktivní}. Viditelnost chunku musí být periodicky žádána, podobně jako musí být žádána aktivnost. Všechny chunky v určité vzdálenosti od hráče (\textit{manhattan distance}, dle aktuálního nastavení dohledové vzdálenosti) jsou v každém snímku obnovovány jako \textit{viditelné}.
+When drawing a chunk, it is necessary to keep in mind its neighboring chunks (in order to calculate the optimizations of adjacent walls for blocks at the edge of the chunk, also for lighting calculations), so the chunk classification is further subdivided into \textit{inactive} (unread in-memory), \textit{active} (loaded in-memory but not drawn) and \textit{visible}. In order to perform calculations for rendering, the chunk must be \textit{visible} and its neighbors in the 8-neighborhood must be \textit{active}. The visibility of the chunk must be requested periodically, just as activity must be requested. All chunks at a certain distance from the player (\textit{manhattan distance}, according to the current setting of the surveillance distance) are refreshed in each frame as \textit{visible}
 
-Všechny výše zmíněné optimalizace jsou akcelerovány na GPU. Z toho důvodu je v~GPU uchovávána textura 3D textura s \textit{block IDs} (jedná se o $1:1$ kopii dat z CPU) a buffer s~informacemi o vlastnostech jednotlivých typů bloků. Data \textit{block IDs} jsou agregována do 3D textur o velikosti 32×32×256 bloků (tedy 2×2 chunků). Tyto oblasti jsou v CPU reprezentovány třídou \inlineDCode{ActiveArea} a jsou centrálně spravovány třídou \inlineDCode{WorldResources}.
+All of the above optimizations are accelerated on the GPU. For this reason, the GPU stores a 3D texture with \textit{block IDs} (a $1:1$ copy of data from the CPU)and a buffer with information about the properties of each block type. Data \textit{block IDs} are aggregated into 3D textures with a size of 32 × 32 × 256 blocks (ie 2 × 2 chunks). These areas are represented in the CPU by the \inlineDCode{ActiveArea} class and are centrally managed by the \inlineDCode{WorldResources} class.
 
-\textit{Block IDs} na GPU jsou uchovávány pro všechny \textit{aktivní chunky}. Ke každému typu bloku je na GPU uloženo, které z jeho šesti stran jsou zcela zakryté neprůhlednou stěnou. Při sestavování dat pro vykreslování je pak spuštěn \textit{compute shader}, kde je na základě těchto informací v jednom paralelním kroku vypočteno, které stěny každého bloku v chunku jsou viditelné, a které ne (viditelné jsou ty stěny, jejichž odpovídající sousedi nemají na stejnou stranu neprůhlednou stěnu). Do výstupního \textit{storage bufferu} je pak pomocí atomického čítače serializován seznam souřadnic těch voxelů, které nejsou prázdné a které mají alespoň jednu stěnu viditelnou. Data tohoto \textit{bufferu} jsou předána CPU, který pak navrácené bloky projde a zavolá pro ně \inlineDCode{b_staticRender}. Jedním z parametrů této funkce je třída \inlineDCode{BlockRenderer}, která poskytuje metody typu \inlineDCode{drawFace} a \inlineDCode{drawBlock} zajišťující sestavení korektních dat pro vykreslování.
+\textit{Block IDs} on the GPU are stored for all \textit{active chunks}. For each block type
+it is stored on the GPU, which of its six sides are completely covered by an opaque wall. At
+compiling the data for rendering is then run a \textit{compute shader} where it is based on these information in one parallel step, which walls of each block in the chunk are calculated visible and which are not (those walls whose corresponding neighbors do not have an opaque wall on the same side are visible). The output \textit{storage buffer} is then atomic counters serialized list of coordinates of those voxels that are not empty and that have at least one wall visible. The data of this \textit{buffer} is passed to the CPU, which is then returned goes through the blocks and calls \inlineDCode{b_staticRender} for them. One of the parameters of this function is the class \inlineDCode{BlockRenderer}, which provides \inlineDCode{drawFace} and \inlineDCode{drawBlock} methods to build the correct data for rendering.
 
-Stejný \textit{compute shader} zajišťuje i agregaci sousedících stěn. Pro každou stěnu každého voxelu je určena velikost obdélníku, ve kterém jsou všechny stěny viditelné a stejného typu. Tato data jsou pak předána CPU, na kterém třída \inlineDCode{BlockRednerer} zajistí konstrukci primitiva správných rozměrů. Informace je předána pouze bloku v jednom z okrajů obdélníku; ostatním blokům je předán rozměr 0×0, který \inlineDCode{BlockRednerer} informuje, že vykreslení dané stěny zajišťuje jiný blok. Maximální agregace je 8×8 stěn, což je dáno velikostí pracovní skupiny \textit{compute shaderu} (8×8×8) a tím, že uv souřadnice jsou uloženy ve 2× 4 bitech (rozsah přípustných hodnot je 0–15, pro 16× agregaci by byl třeba rozsah 0–16). Vizualizaci agregace lze v aplikaci aktivovat nastavením vizualizovaných dat (první \textit{combobox} shora) na "Aggregation". Byly implementovány tři metody agregace (lze mezi nimi přepínat 3.~\textit{comboboxem} zespod v menu):
+The same \textit{compute shader} also ensures the aggregation of adjacent walls. For every wall of everyone voxel is determined by the size of the rectangle in which all the walls are visible and of the same type. This data is then passed to the CPU, on which the \inlineDCode{BlockRednerer} class ensures the construction of the primitive the right dimensions. The information is passed only to the block at one of the edges of the rectangle; the other blocks are given a 0 × 0 dimension, which \inlineDCode{BlockRednerer} informs that the wall is being drawn provides another block. The maximum aggregation is 8 × 8 walls, which is given by the size of the working group \textit{compute shader} (8 × 8 × 8) and by the fact that the uv coordinates are stored in 2 × 4 bits (the range of allowable values is 0–15, for 16 × aggregation the range 0–16 would be needed). Visualization of aggregation can be activated in the application by setting the visualized data (first \textit{combobox} from above) to "Aggregation". Three aggregation methods have been implemented (you can switch between them with the 3rd \textit{combobox} from below in the menu):
 \begin{itemize}
-	\item \textbf{\inlineDCode{Lines}} agreguje nejprve do maximální míry v jednom směru (2 směry agregace v rovině stěny) a poté spojuje obdélníky stejné délky ve směru druhém.
-	\item \textbf{\inlineDCode{Squares}} agreguje střídavě v jednom a ve druhém směru v mřížce, jejíž velikost se v~každém kroku zdvojnásobí.
-	\item \textbf{\inlineDCode{Squares ext}} přidává k algoritmu \inlineDCode{squares} dodatečný krok, který následně spojuje i~obdélníky nezarovnané do mřížky.
+	\item \textbf{\inlineDCode{Lines}} aggregate first to the maximum extent in one direction (2 directions of aggregation in the plane walls) and then connects rectangles of the same length in the other direction.
+	\item \textbf{\inlineDCode{Squares}} aggregates alternately in one direction and in the other in a grid whose size is doubles at every step.
+	\item \textbf{\inlineDCode{Squares ext}} adds an additional step to the \inlineDCode{squares} algorithm, which then joins the non-aligned rectangles to the grid.
 \end{itemize}
 
-Porovnání efektivity jednotlivých metod je realizováno v oddílu \ref{perf:aggregation}. Problémem agregace je, že vytváří tzv. \textit{T-junctions} (tedy situace, kdy na sebe trojúhelníky nenavazují hranami, ale vrchol jednoho trojúhelníku se nachází na hraně druhého trojúhelníku), které způsobují artefakty v podobě průhledných pixelů (protože OpenGL garantuje přesnou návaznost trojúhelníků pouze v případě, když na sebe trojúhelníky navazují vrcholy). Pro omezení těchto artefaktů byl vytvořen efekt \textit{postprocessingu}, který detekuje bodové díry v~obraze a~vyplňuje je z okolních pixelů.
+The comparison of the effectiveness of individual methods is realized in the section \ref{perf:aggregation}. The problem of aggregation is that it creates the so-called \textit{T-junctions} (ie situations where triangles do not follow each other edges, but the vertex of one triangle is located on the edge of the other triangle) which they cause artifacts in the form of transparent pixels (because OpenGL guarantees the exact continuity of triangles only if the triangles are connected by vertices). Pro limiting these artifacts, a \textit{postprocessing} effect was created that detects point holes in the image and fills them from the surrounding pixels.
 
 \begin{figure}[H]
 	\centering
@@ -1111,18 +1113,25 @@ Porovnání efektivity jednotlivých metod je realizováno v oddílu \ref{perf:a
 	\includegraphics[width=0.49\textwidth]{obrazky-figures/aggrSquares.\imagesExtension}
 	\hfill
 	\includegraphics[width=0.49\textwidth]{obrazky-figures/aggrSquaresExt.\imagesExtension}
-	\caption{Metody agregace stěn bloků: bez agregace, \inlineDCode{lines}, \inlineDCode{squares}, \inlineDCode{squares ext}. Stěny se stejnou barvou označení jsou agregovány do jednoho vykreslovacího primitiva. Vizualizaci agregace lze v aplikaci aktivovat zvolením položky "Aggregation" v prvním \textit{comboboxu} shora.}
+	\caption{Block wall aggregation methods: without aggregation, \inlineDCode{lines}, \inlineDCode{squares}, \inlineDCode{squares ext}. The walls with the same color markings are aggregated into a single rendering primitive. The aggregation visualization can be activated in the application by selecting the "Aggregation" item in the first \textit{combobox} from above.}
 \end{figure}
 
-Výpočty na GPU probíhají asynchronně, na CPU je uchováván kruhový buffer se synchronizačními bariérami jednotlivých výpočtů. Prevence zahlcení GPU těmito výpočty je realizována zavedením maximálního počtu položek v kruhovém bufferu.
+Calculations on the GPU are performed asynchronously, a circular buffer with synchronization barriers of individual calculations is stored on the CPU. Prevention of GPU congestion by these calculations is implemented by introducing the maximum number of items in the circular buffer.
 
-Pravidla optimalizace je dále třeba vhodně rozšířit pro průhledné bloky. Proto byla přidána další verze pravidla: stěny neprůhledných bloků jsou směrem k průhledným blokům vždy vykresleny. Stěny mezi průhlednými bloky nejsou vykresleny pouze v případě, že se jedná o stejný typ bloku.
-\putImage[Průhledné bloky a jejich interakce s bloky neprůhlednými]{transparentBlockFaceOptimizations.\imagesExtension}{width=0.5\textwidth}
+Furthermore, the optimization rules need to be extended appropriately for transparent blocks. Therefore, another version of the rule has been added: the walls of opaque blocks are always drawn towards the transparent blocks. Walls between transparent blocks are not drawn only if they are the same type of block.
+\putImage[Transparent blocks and their interaction with opaque blocks]{transparentBlockFaceOptimizations.\imagesExtension}{width=0.5\textwidth}
 
-\subsection{Vykreslování, \textit{frustum culling}, \textit{depth peeling}}
-V předchozích kapitolách byly popsány metody, jakými se sestavují data pro vykreslování: pro každý region v chunku (\inlineDCode{ChunkRenderRegion}) a pro každý \textit{face context} (\texttt{BlockFace\-Rendering\-Context}) je alokován prostor v atlasu bufferů, ve kterém jsou uloženy informace o vykreslovaných vrcholech. Atlasy jsou celkem dva, jeden pro vrcholy s 8bitovými souřadnicemi (\inlineDCode{GL_UNSIGNED_BYTE}) a jeden pro vrcholy s 32bitovými souřadnicemi v plovoucí řádové čárce (\inlineDCode{GL_FLOAT}).
+\subsection{Rendering, \textit{frustum culling}, \textit{depth peeling}}
+The previous chapters described the methods by which data is compiled for rendering: for each region in the chunk (\inlineDCode{ChunkRenderRegion}) and for each \textit{face context} (\texttt{BlockFace\-Rendering\-Context}) a space is allocated in the buffer atlas in which the information is stored about drawn vertices. There are a total of two atlases, one for vertices with 8-bit coordinates (\inlineDCode{GL_UNSIGNED_BYTE}) and one for vertices with 32-bit coordinates in the floating point coordinates (\inlineDCode{GL_FLOAT}).
 
-Pomocí \textit{compute shaderu} je vypočten seznam regionů, které jsou pro kameru viditelné. Tuto funkcionalitu realizuje třída \inlineDCode{FrustumManager}. Každé invokaci odpovídá jeden chunk, invokace iterativně projde všechny regiony v chunku a seznam viditelných regionů serializuje pomocí atomického čítače do \textit{storage bufferu}. Region je považován za viditelný, pokud alespoň jeden z jeho osmi hraničních vrcholů je před \textit{near} rovinou, alespoň jeden vrchol je vpravo od levého okraje obrazovky, alespoň jeden z vrcholů je vlevo od pravého okraje obrazovky a obdobně pro horní a spodní okraj. Detekce těchto podmínek je realizována projekcí souřadnic do prostoru obrazovky (pomocí projekční matice) a následným porovnáním vůči $1$ nebo $-1$; pakliže je komponenta $w$ při projekci menší než nula, jsou výsledky porovnání bočních okrajů invertovány.
+Using the \textit{compute shader}, a list of regions that are visible to the camera is calculated.
+This functionality is implemented by the \inlineDCode{FrustumManager} class. Each invocation corresponds to one chunk,
+the invocation iteratively traverses all regions in the chunk and serializes the list of visible regions into an \textit{storage buffer} using an atomic counter. The region is considered visible if
+at least one of its eight boundary vertices is in front of the \textit{near} plane, at least one vertex is
+to the right of the left edge of the screen, at least one of the vertices is to the left of the right edge of the screen and similarly for the top and bottom edges. Detection of these conditions is realized by projection
+coordinates into the screen space (using a projection matrix) and subsequent comparison with
+$1$ or $−1$; if component $w$ is less than zero at projection, the results of the comparison are
+side edges inverted.
 
 \begin{figure}[H]
 	\centering
@@ -1132,27 +1141,27 @@ Pomocí \textit{compute shaderu} je vypočten seznam regionů, které jsou pro k
 	\end{minipage}
 	\vspace{2mm}
 	
-	\caption{Demonstrace \textit{frustum cullingu}; červené čáry v horním obrázku označují hrany a střed projekčního jehlanu. Zelený čtyřúhelník označuje oblast pokrytou \textit{shadow mapou} (pouze orientační). V aplikaci lze do pohledu shora přepnout klávesou F3.}
+	\caption{Demonstration of \textit{frustum culling}; the red lines in the upper image indicate the edges and center of the projection pyramid. The green rectangle indicates the area covered by the \textit{shadow map} (orientation only). In the application, you can switch to the top view with the F3 key.}
 \end{figure}
 
-Výpočty jsou současně provedeny pro projekční matici z pohledu hráče a pro matici používanou při \textit{shadow mappingu}. Veškeré vykreslování je realizováno $c \cdot n$ voláními funkce \inlineDCode{glMultiDrawArrays}, kde $c$ je počet \textit{face contexts} v aplikaci (8) a $n$ je počet buffer atlasů (2). Jelikož se využívá jeden velký buffer, je možné vykreslit všechny chunk regiony jedním voláním, stav se musí měnit pouze pro různé \textit{face contexts} (jak již bylo uvedeno, různé kontexty používají různé shadery, mají různé atlasy textur a mohou se lišit v nastavení jako např. \inlineDCode{GL_CULL_FACE}). Výstupem vykreslování jsou hloubková textura, \textit{albedo} a normálová textura. Aplikace zavádí \textit{deferred shading}, tedy stínování je realizováno v \textit{postprocessingu}.
+The calculations are performed simultaneously for the projection matrix from the player's point of view and for the matrix used in \textit{shadow mapping}. All rendering is done $c \cdot n$ by calling the glMultiDrawArrays function, where $c$ is the number of face contexts in the application (8) and $n$ is the number of buffer atlases (2). Since one large buffer is used, it is possible to render all chunk regions in one call, the state has to change only for different \textit{face contexts} (as already mentioned, different contexts use different shaders, have different texture atlases and may differ in settings such as. \inlineDCode{GL_CULL_FACE}). The rendering output is a depth texture, an \textit{albedo}, and a \textit{normal texture}. The application introduces \textit{deferred shading}, ie shading is implemented in \textit{postprocessing}.
 
-Vykreslování průhledných objektů je řešeno \textit{depth peelingem} s až třemi vrstvami. Všechny průhledné objekty jsou tedy vykresleny několikrát; míchání barev (\inlineDCode{GL_BLEND}) je při vykreslování vypnuto, takže výstupem je vždy průhledný objekt nejblíž kameře. Druhý a třetí průchod však provádí dodatečný \textit{near depth test} (implementovaný ve \textit{fragment shaderu}), který zahazuje ty fragmenty, které jsou blíže ke kameře (nebo ve stejné vzdálenosti) oproti fragmentům z předchozího průchodu.
+Rendering of transparent objects is solved by \textit{depth peeling} with up to three layers. Therefore, all transparent objects are drawn several times; color blending (\inlineDCode{GL_BLEND}) is turned off when rendering, so the output is always a transparent object closest to the camera. However, the second and third passes perform an additional \textit{near depth test} (implemented in a \textit{fragment shader}) that discards those fragments that are closer to the camera (or at the same distance) from the fragments from the previous pass.
 
-\putImage[Třívrstvý \textit{depth peeling}, vizualizace jednotlivých vrstev]{depthPeeling.\imagesExtension}{width=0.9\textwidth}
+\putImage[Three-layer \textit{depth peeling}, visualization of individual layers]{depthPeeling.\imagesExtension}{width=0.9\textwidth}
 
-\subsection{Osvětlení} \label{lightingImpl}
-Data osvětlení jsou uchovávána v 3D textuře na GPU. Svět je rozdělen do oblastí o velikosti 128×128×256 voxelů, každá tato oblast odpovídá jedné 3D textuře a je reprezentována třídou \inlineDCode{VisibleArea}. Každá ze čtyř komponent (RGB + denní světlo) je uložena ve čtyřech bitech. Osvětlení je aplikováno jako průchod v \textit{postprocessingu}. Protože OpenGL nativně nepodporuje texturu, kde jsou složky uloženy ve čtyřech bitech (a interně texturu \inlineDCode{GL_RGBA4} ukládá jako \inlineDCode{GL_RGBA8}, což zbytečně plýtvá místem), jsou všechny složky uloženy v jedné komponentě \inlineDCode{GL_R16UI} a korektní interpolace jednotlivých složek při vzorkování je implementována ručně. Aby se při vzorkování dala využít funkce \inlineDCode{textureGather}, která není podporována pro 3D textury, je textura reprezentována jako pole 2D textur, kde vrstvy odpovídají souřadnici $z$ (výška).
+\subsection{Lighting} \label{lightingImpl}
+Lighting data is stored in 3D texture on the GPU. The world is divided into areas of size 128 × 128 × 256 voxels, each of which corresponds to one 3D texture and is represented by the \inlineDCode{VisibleArea} class. Each of the four components (RGB + daylight) is stored in four bits. The lighting is applied as a passage in \textit{postprocessing}. Because OpenGL does not natively support textures where folders are stored in four bits (and internally stores \inlineDCode{GL_RGBA4} textures as \inlineDCode{GL_RGBA8}, which wastes space), all folders are stored in a single \inlineDCode{GL_R16UI} component, and correct sampling interpolation is implemented manually. In order to use the \inlineDCode{textureGather} function when sampling, which is not supported for 3D textures, the texture is represented as an array of 2D textures, where the layers correspond to the $z$ (height) coordinate.
 
-Do 4 bitů lze uložit celkem 16 různých úrovní osvětlení (0--15), což souhlasí s omezením dosahu jevů danou velikostí chunku, který má v horizontální rovině rozměr 16 voxelů. Zvýšení maximálního možného dosahu světla by tedy vyžadovalo zvětšení velikosti chunku, a kromě toho také přechod z \inlineDCode{GL_R16UI} na \inlineDCode{GL_R32UI}, což by zdvojnásobilo paměťové nároky.
+A total of 16 different lighting levels (0--15) can be stored in 4 bits, which agrees with the limitation of the range of phenomena due to the size of the chunk, which has a dimension of 16 voxels in the horizontal plane. Thus, increasing the maximum possible light range would require increasing the chunk size, as well as switching from \inlineDCode{GL_R16UI} to \inlineDCode{GL_R32UI}, which would double memory requirements.
 
 Celkově je tedy na GPU kromě dat pro vykreslování trojúhelníků (145 MB pro dohl. vzd. 32 chunků) třeba ukládat dva bajty s \textit{block ID} a dva bajty pro údaje o osvětlení na každý voxel. Při dohledové vzdálenosti 32 chunků ($(2\cdot32+1)^2 = 4\,225$ chunků, což odpovídá 276 889 600 voxelů) je tedy potřeba přibližně 1,2 GB grafické paměti; v praxi to může být kolem 2 GB kvůli dalším použitým zdrojům, nedokonalému zarovnání (kdy není využita celá alokovaná textura) a kvůli tomu, že \textit{block IDs} se uchovávají pro všechny \textit{aktivní} chunky, tedy pro oblast s průměrem o dva chunky větší, než je dohledová vzdálenost (protože všichni sousedi \textit{viditelných} chunků musí být \textit{aktivní}).
 
-Výpočet dat osvětlení také probíhá na GPU; celulární algoritmus popsaný v sekci \ref{lightingModel} je vhodný pro akceleraci na grafickém koprocesoru. Pro výpočet osvětlení se využívají i \textit{block IDs} sousedících chunků (8-okolí). Výpočet probíhá v několika krocích (jeden krok odpovídá jednomu spuštění \textit{kernelu}):
+Lighting data is also calculated on the GPU; the cellular algorithm described in section \ref{lightingModel} is suitable for graphics coprocessor acceleration. \textit{Block IDs} of adjacent chunks (8-surroundings) are also used to calculate the lighting. The calculation takes place in several steps (one step corresponds to one \textit{kernel} start):
 \begin{itemize}
-	\item V prvním kroku se nastaví iniciální hodnoty osvětlení na místa zdrojů světla a propaguje se denní světlo shora dolů. Tento běh probíhá ve 2D (každá invokace odpovídá jednomu sloupci).
-	\item V dalších krocích se výpočty provádějí v diskrétních oblastech 8×8×8 s využitím vláknové kooperace. Mřížka dělení do diskrétních oblastí je v každém běhu posunuta o 4 jednotky ve všech třech směrech, takže mřížka alteruje podobně jako okolí typu \textit{margolus} u celulárních automat. Takto je celkem provedeno pět kroků, což zajistí korektní propagaci i přes dělení výpočtů do diskrétních buněk.
-	\item Jako výsledek se vždy použijí pouze data prostředního chunku. Data okolních chunků se zahodí, protože nejsou kompletní -- nezohledňují zdroje světla od části jejich sousedů.
+	\item In the first step, the initial lighting values are set to the locations of the light sources and daylight is propagated from top to bottom. This run takes place in 2D (each invocation corresponds to one column).
+	\item In the next steps, the calculations are performed in discrete areas of 8×8×8 using fiber cooperation. The grid of division into discrete areas is shifted by 4 units in all three directions in each run, so that the grid alters similarly to the \textit{margolus}-type environment in cellular automata. In this way, a total of five steps are performed, which ensures correct propagation despite the division of calculations into discrete cells.
+	\item As a result, only the middle chunk data is always used. The data of the surrounding chunks are discarded because they are not complete -- they do not take into account light sources from some of their neighbors.
 \end{itemize}
 
 \begin{figure}[H]
@@ -1238,67 +1247,67 @@ Výpočet dat osvětlení také probíhá na GPU; celulární algoritmus popsan�
 		\draw (6.5, 6.5) circle(0.3) node {\tiny 1};
 		\end{tikzpicture}
 	\end{minipage}
-	\caption{Šíření světla v alternujících diskrétních oblastech (2D, zmenšené měřítko)}
+	\caption{Light propagation in alternating discrete regions (2D, reduced scale)}
 \end{figure}
 
-Souhrnně jsou tedy k vykreslování chunků třeba tyto kroky:
-\putImage[Souhrn procesů nutných k vykreslování. Zeleně jsou označeny prostředky a~procesy vázané na GPU, modře na CPU.]{chunkRenderProcess.pdf}{width=\textwidth}
+In summary, the following steps are required to draw chunks:
+\putImage[Summary of processes required for rendering. Resources and processes bound to the GPU are marked in green, blue on the CPU.]{chunkRenderProcess.pdf}{width=\textwidth}
 
 \section{\textit{Postprocessing}}
-Postprocessing se skládá z následujících průchodů: \nopagebreak
-\putImage[Průchody při \textit{postprocessingu}]{postprocessing.pdf}{width=\textwidth}
+Postprocessing consists of the following passes: \nopagebreak
+\putImage[\textit{Postprocessing} passes]{postprocessing.pdf}{width=\textwidth}
 
-Postprocessing tedy obsahuje jeden lokální průchod pro každou vrstvu (neprůhledná + 3 vrstvy \textit{depth peelingu}), dva globální průchody plus výpočty rozostření. V lokálních průchodech se počítá osvětlení (na základě inverzní projekční matice a hloubkové textury se pixely obrazovky promítnou do světa a vzorkuje se 3D textura s osvětlením, jak bylo popsáno v oddílu \ref{lightingImpl}) a \textit{shadow mapping} pro sluneční světlo. Světelné mapy jsou \textit{shaderu} předány formou \textit{bindless} textur v uniformní paměti. Pokud by každému chunku odpovídala jedna textura, při dohledové vzdálenosti 32 chunků ($(32 \cdot 2 + 1)^2 = 4\,225$ chunků celkem) a velikosti ukazatele na texturu 8 B by bylo třeba 34\,kB uniformní paměti, což překračuje minimální garantovanou velikost 16 kB. Proto byla data agregována do větších textur o~velikosti 128×128×256 bloků (8×8 chunků, spravované třídou \inlineDCode{VisibleArea}, jak bylo uvedeno v oddílu \ref{lightingImpl}), což redukuje paměťové nároky 64krát. Data pro vlastní emisi pixelů (\textit{glow map}) jsou uložena v alfa kanálu normálové textury.
+Postprocessing therefore contains one local pass for each layer (opaque + 3 layers of \textit{depth peeling}), two global passes plus blur calculations. In local passages, illumination is calculated (based on the inverse projection matrix and depth texture, screen pixels are projected into the world and 3D texture with illumination is sampled as described in Section \ref{lightingImpl}) and \textit{shadow mapping} for sunlight. Light maps are transmitted to the \textit{shader} in the form of \textit{bindless} textures in uniform memory. If one texture corresponded to each chunk, at a viewing distance of 32 chunks $(32 \cdot 2 + 1)^2 = 4\,225$ chunks in total) and a texture pointer size of 8 B, 34\,kB of uniform memory would be required, which exceeds the minimum guaranteed size of 16 kB . Therefore, the data was aggregated into larger textures of 128×128×256 blocks (8×8 chunks, managed by the \inlineDCode{VisibleArea} class, as described in Section \ref{lightingImpl}), which reduces memory requirements by 64 times. The data for the actual emission of pixels (\textit{glow map}) is stored in the alpha channel of the normal texture.
 
-V aplikaci je implicitně aktivován 2× \textit{multisampling}; lokální průchody v důsledku toho pracují s \textit{multisample} texturami. Výstupem lokálních průchodů jsou již jednovrstvé textury se stínovaným obrazem. Z prvního \textit{depth peeling průchodu} (tedy pro objekty nejblíž ke kameře) je pro další \textit{postprocessing} exportována hloubková a normálová mapa. V případě vypnutého \textit{depth peelingu} se mapy exportují z neprůhledného průchodu.
+2 × \textit{multisampling} is activated by default in the application; as a result, local passages work with \textit{multisample} textures. The output of local passages are already single-layer textures with a shaded image. From the first \textit{depth peeling passage} (ie for objects closest to the camera), a depth and normal map is exported for further \textit{postprocessing}. If \textit{depth peeling} is turned off, maps are exported from an opaque pass.
 
 \pagebreak
 \subsection{\textit{Shadow mapping}}
-\textit{Shadow mapping} využívá \textit{percentage closer filtering} \cite{ReevesWilliamT.1987Rasw}, vzorkuje se oblast 2×2 texelů pomocí jednoho volání funkce \inlineDCode{textureGather} a výsledek se interpoluje (textura má nastaveno \inlineDCode{GL_TEXTURE_COMPARE_FUNC} na \inlineDCode{GL_LEQUAL}, takže normalizaci souřadnic a porovnávání vůči hloubkové mapě zajišťuje OpenGL).
+\textit{Shadow mapping} uses \textit{percentage closer filtering} \cite{ReevesWilliamT.1987Rasw}, the area of 2 × 2 texels is sampled using one call to the \inlineDCode{textureGather} function and the result is interpolated (the texture has \inlineDCode{GL_TEXTURE_COMPARE_FUNC} set to \inlineDCode{GL_LEQUAL}, so OpenGL normalizes the coordinates and comparisons to the depth map).
 
-\putImage[Stín vrhaný sluncem, rozlišení \textit{shadow mapy} $2048^2$, aplikován \textit{percentage closer filtering}]{shadowMapping.\imagesExtension}{width=0.9\textwidth}
+\putImage[Shadow cast by the sun, \textit{shadow map} resolution $2048^2$, applied \textit{percentage closer filtering}]{shadowMapping.\imagesExtension}{width=0.9\textwidth}
 
-Vzorkované souřadnice jsou mírně posunuty ve směru normály a porovnávaná hloubka je mírně snížena, aby se předešlo artefaktům na stěnách téměř rovnoběžných se slunečním světlem.
+The sampled coordinates are slightly shifted in the normal direction, and the compared depth is slightly reduced to avoid artifacts on walls almost parallel to sunlight.
 
-\putImage[Artefakty v \textit{shadow mappingu} při velkých úhlech mezi normálou povrchu a~dopadajícího světla]{shadowMappingArtefact.\imagesExtension}{width=0.9\textwidth}
+\putImage[Artifacts in \textit{shadow mapping} at large angles between the surface normal and the incident light]{shadowMappingArtefact.\imagesExtension}{width=0.9\textwidth}
 
-Výpočet osvětlení vzniká aditivní kombinací 4 složek (\textit{ambientní} složka, složka umělého osvětlení, \textit{ambientní} složka slunečního světla a směrová složka slunečního světla), jak bylo uvedeno v rovnici \ref{lightingEq}. Pakliže je aktivovaný \textit{shadow mapping}, směrová složka denního osvětlení se dále násobí s jeho výstupem.
+The lighting calculation is created by an additive combination of 4 components (\textit{ambient} component, artificial lighting component, \textit{ambient} sunlight component and directional component of sunlight), as shown in Equation \ref{lightingEq}. If \textit{shadow mapping} is activated, the directional component of the daylight is further multiplied by its output.
 
-\textit{Shadow mapping} vyžaduje dodatečné vykreslení scény ortogonální maticí "z pohledu slunce". Při vykreslování do stínové mapy je \textit{face culling} zapnutý pro všechny kontexty, aby se předešlo např. prosvítání slunečního světla skrze stěny jeskyní. Pro kontexty, které to vyžadují, se provádí \textit{alpha testing}. Průhlednost stínů lineárně klesá se vzdáleností od kamery, ve vzdálenosti 50 bloků je už aplikován pouze standardní osvětlovací model. Je zavedena optimalizace upravující projekční matici tak, aby byla vykreslována pouze oblast před kamerou: do neoptimalizované matice je promítnuto všech osm vrcholů pohledového jehlanu kamery a matice je posunuta a škálována tak, aby vykreslovaná oblast odpovídala obalovému obdélníku promítnutých bodů. Do stínové mapy nejsou vykresleny průhledné bloky, v důsledku čehož nevrhají žádný stín.
+\textit{Shadow mapping} requires additional rendering of the scene with an orthogonal matrix "from the perspective of the sun". When rendering to a shadow map, \textit{face culling} is turned on for all contexts to prevent, for example, sunlight shining through the walls of caves. \textit{Alpha testing} is performed for contexts that require it. The transparency of the shadows decreases linearly with the distance from the camera, at a distance of 50 blocks only the standard lighting model is applied. An optimization is introduced that modifies the projection matrix so that only the area in front of the camera is drawn: all eight vertices of the camera's viewing pyramid are projected into the non-optimized matrix, and the matrix is ​​shifted and scaled so that the drawn area matches the envelope rectangle of projected points. Transparent blocks are not drawn in the shadow map, so they do not cast any shadows.
 
 \subsection{\textit{Screen space ambient occlusion (SSAO)}}
-V prvním globálním průchodu dochází ke kombinaci jednotlivých vrstev a k výpočtům \textit{SSAO}. \textit{SSAO} byla původně zamýšlena jako suplementární technika k "přirozenému" \textit{ambient occlusion}, které je důsledkem osvětlovacího modelu -- ten dobře funguje pro plné krychle, ale nepokrývá detaily vznikající např. při vykreslování vegetace. Pro neuspokojivé výsledky a vysokou výpočetní náročnost je však SSAO ve výchozím nastavení deaktivované.
+In the first global pass, the individual layers are combined and the \textit{SSAO} calculations are performed. \textit{SSAO} was originally intended as a complementary technique to the "natural" \textit{ambient occlusion} that results from the lighting model - it works well for full cubes, but does not cover details such as vegetation rendering. However, SSAO is disabled by default due to unsatisfactory results and high computational complexity.
 
-\textit{SSAO} pro každý pixel sbírá 2 až 8 vzorků hloubky (dle vzdálenosti pixelu od kamery) v polokouli dané vzdáleností a normálou pixelu. Vzorky jsou umístěné do 2D spirály vůči normále, hloubka je pak daná uniformním rozložením. Na efekt \textit{SSAO} je aplikováno 9×9 Gaussovo rozostření se $\sigma = 3$.
+For each pixel, \textit{SSAO} collects 2 to 8 depth samples (depending on the distance of the pixel from the camera) in a hemisphere given by the distance and normal of the pixel. The samples are placed in a 2D spiral relative to the normal, the depth is then given by a uniform distribution. A 9 × 9 Gaussian blur with $\sigma = 3$ is applied to the \textit{SSAO} effect.
 
 \begin{figure}[H]
 	\includegraphics[width=0.49\textwidth]{obrazky-figures/ssaoOff.\imagesExtension}
 	\hfill
 	\includegraphics[width=0.49\textwidth]{obrazky-figures/ssaoOn.\imagesExtension}
-	\caption{Scéna s deaktivovaným (vlevo) a aktivovaným (vpravo) \textit{screen space ambient occlusion}}
+	\caption{Scene with \textit{screen space ambient occlusion} deactivated (left) and activated (right)}
 \end{figure}
 
 \subsection{\textit{Depth of Field (DOF)}}
-Aplikace neimplementuje efekt \textit{depth of field} v takovém smyslu, jak byl popsán v oddílu \ref{dof}, spíše se jedná o efekt rozostření při průchodu atmosférou. Rozostřeny jsou tedy vždy objekty nejdále od kamery. Implementace provádí rozostření výstupu prvního globálního průchodu a v druhém průchodu interpoluje tento rozostřený obraz s původním na základě hloubkové informace. Rozostření je realizováno dvěma průchody (horizontální + vertikální) bilaterálním (zachovávající ostré hrany, počítá se rozdíl mezi vzorky v hloubkové textuře) Gaussovým filtrem s jádrem o velikosti 9 pixelů ($4+1+4$) a $\sigma = 2$. V prvním globálním průchodu je obraz navíc na základě hloubky smíšen s barvou pozadí (\textit{skybox} bez složek souvisejících se sluncem) a zprůhledněn na základě vzdálenosti od kamery, čímž vzniká atmosférický efekt.
+The application does not implement the \textit{depth of field} effect in the sense described in section \ref{dof}, but rather the defocus effect as it passes through the atmosphere. Therefore, the objects furthest from the camera are always out of focus. The implementation blurs the output of the first global pass and in the second pass interpolates this out-of-focus image with the original based on depth information. Blurring is realized by two passes (horizontal + vertical) bilateral (preserving sharp edges, the difference between the samples in the deep texture is calculated) Gaussian filter with a core of 9 pixels ($4+1+4$) and $\sigma = 2$. In the first global pass is in addition, the image is mixed with the background color based on depth (\textit{skybox} without sun-related components) and made transparent based on the distance from the camera, creating an atmospheric effect.
 
 \begin{figure}[H]
 	\centering
 	\includegraphics[width=\textwidth]{obrazky-figures/dofOff.\imagesExtension}
-	\caption{Scéna s deaktivovaným \textit{depth of field} a atmosférickým efektem}
+	\caption{Scene where \textit{depth of field} and atmospheric effect is deactivated}
 \end{figure}
 
 \vfill
 	
 \begin{figure}[H]
 	\includegraphics[width=\textwidth]{obrazky-figures/dofOn.\imagesExtension}
-	\caption{Scéna s aktivovaným \textit{depth of field} a atmosférickým efektem}
+	\caption{Scene where \textit{depth of field} and atmospheric effect is activated}
 \end{figure}
 
 \pagebreak
 \subsection{\textit{God rays}}
-Pro krepuskulární paprsky byla zvolena metoda popsaná panem Wesleym, která efekt počítá ve \textit{screen space}. Originální metoda pracuje s "emisní texturou", která pro každý pixel ukládá "emisivitu" od zdroje světla. Pokud je pozadí překryté popředím, je toto reflektováno i~v~emisní textuře a odpovídající pixely jsou černé. Pro každý pixel ve scéně se pak sbírá určitý počet vzorků mezi výchozím pixelem a zdrojem světla a vzorkované hodnoty se sčítají. Výsledný součet je přičten k výstupu.
+For crepuscular rays, the method described by Mr. Wesley was chosen, which calculates the effect in the \textit{screen space}. The original method works with an "emission texture", which for each pixel stores the "emissivity" from the light source. If the background is overlaid by the foreground, this is also reflected in the emission texture and the corresponding pixels are black. For each pixel in the scene, a number of samples are then collected between the starting pixel and the light source, and the sampled values are added. The resulting sum is added to the output.
 
-Místo vzorkování po celé přímce je v této práci vzorkována pouze úzká oblast pixelů v~kotouči slunce (protože zbytek scény má nulovou emisi). Vzorkuje se pouze \textit{depth buffer}, barva emise se počítá přímo v \textit{shaderu} a je pro všechny vzorky uvnitř slunce stejná.
+Instead of sampling along the entire line, only a narrow area of pixels in the sun's disk is sampled in this work (because the rest of the scene has zero emission). Only the \textit{depth buffer} is sampled, the emission color is calculated directly in the \textit{shader} and is the same for all samples inside the sun.
 
 \begin{figure}[H]
 	\centering
@@ -1326,23 +1335,23 @@ Místo vzorkování po celé přímce je v této práci vzorkována pouze úzká
 	\draw[fill=yellow] (4.76,4.76) circle (0.07);
 	\draw[fill=yellow] (5,5) circle (0.07);
 	\end{tikzpicture}
-	\caption{Původní navržené vzorkování (vlevo) vs. implementované vzorkování (vpravo) v efektu \textit{god rays}}
+	\caption{Original proposed sampling (left) vs. implemented sampling (right) in the effect of \textit{god rays}}
 \end{figure}
 
-\putImage[\textit{God rays} v aplikaci]{godRays.\imagesExtension}{width=\textwidth}
+\putImage[\textit{God rays} in the application]{godRays.\imagesExtension}{width=\textwidth}
 
-Tato implementace ke slunci částečně přistupuje jako k bodovému zdroji světla (nikoli jako ke kruhovému). Důsledkem toho je, že pokud je zakryta spodní část slunce (od středu dolů), slunce vrhá paprsky pouze nahoru, i když by vrchní polovina slunce měla taktéž vrhat paprsky. Pro odstranění tohoto jevu by bylo třeba vzorkovat celou plochu slunečního kotouče, nikoli pouze přímku mezi výchozím pixelem a středem slunce.
+This implementation partially treats the sun as a point source of light (not as a circular one). As a result, if the lower part of the sun is covered (from the center down), the sun only casts the rays upwards, although the upper half of the sun should also cast the rays as well. To eliminate this phenomenon, it would be necessary to sample the entire area of the solar disk, not just the line between the starting pixel and the center of the sun.
 
 \begin{figure}[H]
 	\includegraphics[width=0.49\textwidth]{obrazky-figures/godRays_dem1.\imagesExtension}
 	\hfill
 	\includegraphics[width=0.49\textwidth]{obrazky-figures/godRays_dem2.\imagesExtension}
-	\caption{Zakrytí slunce od středu k některému okraji zamezuje vrhání paprsků do daného směru ve zvolené implementaci \textit{god rays}}
+	\caption{Covering the sun from the center to some edge prevents the rays from throwing in a given direction in the chosen implementation of \textit{god rays}}
 \end{figure}
 
-\section{\textit{Skybox} a střídání dne a noci}
+\section{\textit{Skybox} and alternation of day and night}
 
-\textit{Skybox} je dynamicky generován v druhém globálním průchodu \textit{postprocessingu}; současně je také jeho část počítána v prvním průchodu pro barvu atmosféry v DOF. Většina výpočtů pracuje s normálou kamery (a vše je tedy založené na úhlech), slunce se ale počítá ve \textit{screen space} kvůli deformacím, které by vznikaly při promítání sférického \textit{skyboxu} na rovinu.
+\textit{Skybox} is dynamically generated in the second global \textit{postprocessing} pass; at the same time, its part is also counted in the first pass for the color of the atmosphere in the DOF. Most calculations work with the normal of the camera (and everything is based on angles), but the sun is calculated in the \textit{screen space} due to the deformations that would occur when projecting a spherical \textit{skybox} on a plane.
 
 \begin{figure}[H]
 	\centering
@@ -1368,30 +1377,30 @@ Tato implementace ke slunci částečně přistupuje jako k bodovému zdroji sv�
 	\end{tikzpicture}
 	\hspace{4cm}
 	\includegraphics[height=6.5cm]{obrazky-figures/sunDeformation.\imagesExtension}
-	\caption{Demonstrace deformace slunce při promítání na rovinu}
+	\caption{Demonstration of the deformation of the sun when projected on a plane}
 \end{figure}
 
-Výpočet pak probíhá pouze pro pixely s průhledností menší než jedna (\textit{skybox} se tedy nepočítá pro pixely zcela překryté popředím). Barva každého pixelu se počítá dle následující rovnice:
+The calculation then only takes place for pixels with a transparency of less than one (the \textit{skybox} is therefore not calculated for pixels completely covered by the foreground). The color of each pixel is calculated according to the following equation:
 
 \begin{equation}
 \begin{array}{r l l}
-	k_1 = & \text{clamp}_{\langle 0,1 \rangle}((\vec{n}_z + 0.1) \cdot 5)^2 & \text{(výška nad horizontem)} \\
+	k_1 = & \text{clamp}_{\langle 0,1 \rangle}((\vec{n}_z + 0.1) \cdot 5)^2 & \text{(height above the horizon)} \\
 	d_{sun} = & |\vec{n}_{light} - \vec{n}| \\
-	\vec{c} = & \vec{c}_{base} \cdot (0.4 + 0.6 \cdot k_1) & \text{(základní barva)} \\
-	& + \vec{c}_{horizon} \cdot (1 - |\vec{n}_z|) & \text{(horizont)} \\
-	& + \vec{c}_{halo} \cdot \max_0(1 - d_{sun} \cdot 0.5) \text{,} & \text{(záře od slunce)} \\
-	& + \vec{c}_{sun} \cdot min(1, s_{size} / d_{sunPx}) ^ {s_{pow}} \cdot k12 & \text{(slunce)}
+	\vec{c} = & \vec{c}_{base} \cdot (0.4 + 0.6 \cdot k_1) & \text{(basic color)} \\
+	& + \vec{c}_{horizon} \cdot (1 - |\vec{n}_z|) & \text{(the horizon)} \\
+	& + \vec{c}_{halo} \cdot \max_0(1 - d_{sun} \cdot 0.5) \text{,} & \text{(glow from the sun)} \\
+	& + \vec{c}_{sun} \cdot min(1, s_{size} / d_{sunPx}) ^ {s_{pow}} \cdot k12 & \text{(the sun)}
 \end{array}
 \end{equation}
 
-kde $\vec{n}$ je normála kamery, $\vec{n}_{light}$ je normála denního světla, $\vec{c}_{XX}$ jsou barvy jednotlivých složek, $s_{size}$ je parametr udávající velikost slunce, $d_{sunPx}$ je vzdálenost od středu slunce v~pixelech a $s_{pow}$ je parametr ovlivňující velikost prstence slunce.
+where $\vec{n}$ is the normal of the camera,$\vec{n}_{light}$ is the normal of daylight, $\vec{c}_{XX}$ are the colors of the individual components, $s_{size}$ is the parameter indicating the size of the sun, $d_{sunPx}$ is the distance from the center of the sun in pixels and $s_{pow}$ is the parameter influencing the size of the sun's ring.
 
-\textit{Skybox} se tedy aditivně skládá ze čtyř vrstev:
+\textit{Skybox} thus additively consists of four layers:
 \begin{compactenum}
-	\item Základní složka (která je pro spodní polovinu \textit{skyboxu} vynásobena koeficientem $0.6$)
-	\item Složka horizontu
-	\item Složka horizontu v okolí slunce
-	\item Slunce
+	\item Basic component (which is multiplied by a coefficient of $0.6$ for the lower half of the \textit{skyboxu})
+	\item Horizon component
+	\item The component of the horizon around the sun
+	\item The sun
 \end{compactenum}
 
 \begin{figure}[H]
@@ -1402,22 +1411,23 @@ kde $\vec{n}$ je normála kamery, $\vec{n}_{light}$ je normála denního světla
 	\includegraphics[width=0.24\textwidth]{obrazky-figures/skyboxL3.\imagesExtension}
 	\hfill
 	\includegraphics[width=0.24\textwidth]{obrazky-figures/skyboxL4.\imagesExtension}
-	\caption{Postupná aplikace jednotlivých složek \textit{skyboxu}}
+	\caption{Gradual application of individual \textit{skybox} layers}
 \end{figure}
 
-Parametry ovlivňující vzhled \textit{skyboxu} jsou \textit{shaderu} předávány přes uniformní paměť. Hodnoty nejsou konstantní, počítají se interpolací z přednastavených hodnot na základě denní doby. Hodnoty parametrů pro \textit{skybox} určuje třída \inlineDCode{WorldEnvironment} (implementace pro výchozí svět je v třídě \inlineDCode{WorldEnvironment_Overworld}). V noci je měsíc vykreslován stejným způsobem, jakým je ve dne vykreslováno slunce -- to zahrnuje i \textit{shadow mapping}, \textit{god rays} a složku denního světla v osvětlovacím modelu.  Návrh tohoto \textit{skyboxu} se nezakládá na žádných publikacích.
+Parameters affecting the appearance of the \textit{skybox} are passed to the \textit{shader} via uniform memory. The values are not constant, they are calculated by interpolation from preset values based on the time of day. The parameter values for the \textit{skybox} are determined by the \inlineDCode{WorldEnvironment} class (the implementation for the default world is in the \inlineDCode{WorldEnvironment_Overworld} class). At night, the moon is drawn in the same way that the sun is drawn during the day -- this includes \textit{shadow mapping}, \textit{god rays} and the daylight component in the lighting model. The design of this \textit{skybox} is not based on any publications.
 
-\putImage[Denní doba v aplikaci: ráno]{skybox1.\imagesExtension}{width=\textwidth}
-
-\vfill
-
-\putImage[Denní doba v aplikaci: dopoledne]{skybox2.\imagesExtension}{width=\textwidth}
-
-\putImage[Denní doba v aplikaci: večer]{skybox3.\imagesExtension}{width=\textwidth}
+% Google said: Time of day in the application: in the morning
+\putImage[Time of day in the application: sunrise]{skybox1.\imagesExtension}{width=\textwidth}
 
 \vfill
 
-\putImage[Denní doba v aplikaci: noc]{skybox4.\imagesExtension}{width=\textwidth}
+\putImage[Time of day in the application: morning]{skybox2.\imagesExtension}{width=\textwidth}
+
+\putImage[Time of day in the application: evening]{skybox3.\imagesExtension}{width=\textwidth}
+
+\vfill
+
+\putImage[Time of day in the application: night]{skybox4.\imagesExtension}{width=\textwidth}
 
 \chapter{Aplikace} \label{ch:app}
 Na přiloženém disku lze nalézt jak předkompilovanou verzi aplikace (pro Windows x64), tak její zdrojové kódy. K sestavení aplikace je třeba mít nainstalován kompilátor D. Ten lze stáhnout z \url{https://dlang.org/}, na linuxových systémech bývá k dispozici jako balíček \verb|dmd|. Aplikace se sestaví příkazem \verb|dub build --build=release --arch=x86_64|, binární soubor se vytvoří ve složce \verb|bin_x86_64| (resp. jiný prefix pro jinou architekturu). Pro spuštění je vyžadovaná grafická karta s podporou OpenGL 4.6+ a 4 GB grafické paměti. Předkompilované binární soubory lze spustit přímo z CD; v tom případě je ale SQLite databáze se světem vedená v paměti RAM a svět se neukládá na disk.
