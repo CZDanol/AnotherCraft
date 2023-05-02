@@ -1,5 +1,5 @@
 # Anothercraft - visualisation of a procedurally generated voxel terrain
-**The binary is not working, and I won't fix it. Sorry.**
+**The binary is not working, and I won't fix it. Sorry. However, we have a new sneak peek in this repo: https://github.com/AnotherCraft/ac-releases/releases**
 
 A master thesis project. Basically a Minecraft clone, I was focusing on accelerating things on GPU. There is a master thesis text in the repository, however it is in Czech. There's also a first few chapters of the english master thesis translated, then I lost the drive. I might eventually document some of the techniques on a blog or something.
 
