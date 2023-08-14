@@ -1,5 +1,5 @@
 # Anothercraft - visualisation of a procedurally generated voxel terrain
-** THIS IS MY MASTER THESIS. THERE IS ALSO THE ANOTHERCRAFT PROJECT I'VE BEEN WORKING ON AFTER UNIVERSITY, WHICH IS HERE: https://github.com/AnotherCraft **
+**THIS IS MY MASTER THESIS. THERE IS ALSO THE ANOTHERCRAFT PROJECT I'VE BEEN WORKING ON AFTER UNIVERSITY, WHICH IS HERE: https://github.com/AnotherCraft**
 
 **The binary is not working, and I won't fix it. Sorry. However, we have a new sneak peek in this repo: https://github.com/AnotherCraft/ac-releases/releases**
 
